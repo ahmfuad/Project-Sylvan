@@ -10,6 +10,7 @@
 #include "img_converters.h"
 #include "esp_http_server.h"
 #include "esp_random.h"
+#include "mbedtls/base64.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -33,7 +34,13 @@
 //   <S,T=30,H=66,L=235>\n   successful sample
 //   <F>\n                   failed sample
 //
+// Reply to the ATmega after each sample photo is classified by OpenAI:
+//   <C,T>\n                 tub tree / potted plant
+//   <C,O>\n                 random object
+//   <C,E>\n                 no answer (no photo, no Wi-Fi, API error)
+//
 // UART: ESP GPIO14 = RX from ATmega PD1/TXD (through a 1k/2k divider)
+//       ESP GPIO13 = TX to ATmega PD0/RXD (direct wire; keep the SD slot empty)
 // =====================================================
 
 
@@ -66,6 +73,7 @@
 // =====================================================
 
 #define ATMEGA_RX_PIN 14
+#define ATMEGA_TX_PIN 13
 #define ATMEGA_BAUD   9600      // change to 4800 if the ATmega side is changed
 
 HardwareSerial AtmegaSerial(2);
@@ -85,7 +93,60 @@ const char *SERVER_HOST = "sylvan.daftar-e.com";
 const uint16_t SERVER_PORT = 443;
 const char *UPLOAD_PATH = "/api/samples";
 const char *DEVICE_WS_PATH = "/ws/device";
-const char *FW_VERSION = "sylvan-esp32cam-1.0";
+const char *FW_VERSION = "sylvan-esp32cam-1.1";
+
+// ---- OpenAI (tree vs. random object) ----
+// Paste your key here before uploading, and don't commit it: anyone with the board can read it
+// back out of flash, so give this key a monthly spending limit in the OpenAI dashboard.
+const char *OPENAI_API_KEY = "sample_key";
+const char *OPENAI_HOST = "api.openai.com";
+const char *OPENAI_PATH = "/v1/chat/completions";
+//gpt 5.5
+const char *OPENAI_MODEL = "gpt-5.5";
+
+const char *OPENAI_PROMPT =
+    "Photo from a small rover in a rooftop garden. Reply with exactly one word: "
+    "TREE if the main object is a plant or small tree in a tub, pot or planter; "
+    "otherwise OBJECT.";
+
+// api.openai.com chains to GTS Root R4, which is also cross-signed by GlobalSign Root CA.
+// Both are trusted so a switch between the two chains doesn't break classification.
+const char *ROOT_CA_OPENAI PROGMEM = R"CERT(
+-----BEGIN CERTIFICATE-----
+MIICCTCCAY6gAwIBAgINAgPlwGjvYxqccpBQUjAKBggqhkjOPQQDAzBHMQswCQYD
+VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG
+A1UEAxMLR1RTIFJvb3QgUjQwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw
+WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz
+IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjQwdjAQBgcqhkjOPQIBBgUrgQQAIgNi
+AATzdHOnaItgrkO4NcWBMHtLSZ37wWHO5t5GvWvVYRg1rkDdc/eJkTBa6zzuhXyi
+QHY7qca4R9gq55KRanPpsXI5nymfopjTX15YhmUPoYRlBtHci8nHc8iMai/lxKvR
+HYqjQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW
+BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D
+9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8
+p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIDdTCCAl2gAwIBAgILBAAAAAABFUtaw5QwDQYJKoZIhvcNAQEFBQAwVzELMAkG
+A1UEBhMCQkUxGTAXBgNVBAoTEEdsb2JhbFNpZ24gbnYtc2ExEDAOBgNVBAsTB1Jv
+b3QgQ0ExGzAZBgNVBAMTEkdsb2JhbFNpZ24gUm9vdCBDQTAeFw05ODA5MDExMjAw
+MDBaFw0yODAxMjgxMjAwMDBaMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBHbG9i
+YWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9iYWxT
+aWduIFJvb3QgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDaDuaZ
+jc6j40+Kfvvxi4Mla+pIH/EqsLmVEQS98GPR4mdmzxzdzxtIK+6NiY6arymAZavp
+xy0Sy6scTHAHoT0KMM0VjU/43dSMUBUc71DuxC73/OlS8pF94G3VNTCOXkNz8kHp
+1Wrjsok6Vjk4bwY8iGlbKk3Fp1S4bInMm/k8yuX9ifUSPJJ4ltbcdG6TRGHRjcdG
+snUOhugZitVtbNV4FpWi6cgKOOvyJBNPc1STE4U6G7weNLWLBYy5d4ux2x8gkasJ
+U26Qzns3dLlwR5EiUWMWea6xrkEmCMgZK9FGqkjWZCrXgzT/LCrBbBlDSgeF59N8
+9iFo7+ryUp9/k5DPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8E
+BTADAQH/MB0GA1UdDgQWBBRge2YaRQ2XyolQL30EzTSo//z9SzANBgkqhkiG9w0B
+AQUFAAOCAQEA1nPnfE920I2/7LqivjTFKDK1fPxsnCwrvQmeU79rXqoRSLblCKOz
+yj1hTdNGCbM+w6DjY1Ub8rrvrTnhQ7k4o+YviiY776BQVvnGCv04zcQLcFGUl5gE
+38NflNUVyRRBnMRddWQVDf9VMOyGj/8N7yy5Y0b2qvzfvGn9LhJIZJrglfCm7ymP
+AbEVtQwdpf5pLGkkeB6zpxxxYu7KyJesF12KwvhHhm4qxFYxldBniYUr+WymXUad
+DKqC5JlR3XC321Y9YeRq4VzW9v493kHMB65jUr9TU/Qr6cf9tveCX4XSQRjbgbME
+HMUfpIBvFSDJ3gyICh3WZlXi/EjJKSZp4A==
+-----END CERTIFICATE-----
+)CERT";
 
 // ISRG Root X1 — the root certificate that issued the server's Let's Encrypt certificate
 // (valid until 2035-06-04). Used so the ESP32 actually verifies it is talking to the real
@@ -631,6 +692,125 @@ void sendLiveFrameIfDue()
 
 
 // =====================================================
+// CLASSIFY A SAMPLE PHOTO WITH OPENAI (tree vs. object)
+// =====================================================
+//
+// Returns 'T' (tree), 'O' (object) or 'E' (no answer). Timeouts are kept short enough that the
+// ATmega (which waits CLASSIFY_TIMEOUT_MS = 20 s for the reply) always hears back in time.
+
+void *largeAlloc(size_t size)
+{
+    return psramFound() ? ps_malloc(size) : malloc(size);
+}
+
+char classifyPhoto(const uint8_t *jpg, size_t jpgLen)
+{
+    if (jpg == nullptr || jpgLen == 0)
+    {
+        Serial.println("OpenAI: skipped, no photo.");
+        return 'E';
+    }
+    if (WiFi.status() != WL_CONNECTED)
+    {
+        Serial.println("OpenAI: skipped, Wi-Fi not connected.");
+        return 'E';
+    }
+    if (strncmp(OPENAI_API_KEY, "sk-PASTE", 8) == 0)
+    {
+        Serial.println("OpenAI: skipped, OPENAI_API_KEY is still the placeholder.");
+        return 'E';
+    }
+
+    // GPT-5.x are reasoning models: they reject max_tokens/temperature, and reasoning tokens
+    // count against max_completion_tokens, so reasoning is turned off for this one-word answer.
+    String head = String("{\"model\":\"") + OPENAI_MODEL +
+                  "\",\"reasoning_effort\":\"none\",\"max_completion_tokens\":16,"
+                  "\"messages\":[{\"role\":\"user\","
+                  "\"content\":[{\"type\":\"text\",\"text\":\"" + OPENAI_PROMPT +
+                  "\"},{\"type\":\"image_url\",\"image_url\":{\"detail\":\"low\","
+                  "\"url\":\"data:image/jpeg;base64,";
+    const char *tail = "\"}}]}]}";
+
+    size_t b64Len = 0;
+    mbedtls_base64_encode(nullptr, 0, &b64Len, jpg, jpgLen);   // required size, incl. NUL
+    size_t bodyCap = head.length() + b64Len + strlen(tail) + 1;
+    char *body = (char *)largeAlloc(bodyCap);
+    if (body == nullptr)
+    {
+        Serial.printf("OpenAI: out of memory for a %u-byte request.\n", (unsigned int)bodyCap);
+        return 'E';
+    }
+
+    memcpy(body, head.c_str(), head.length());
+    size_t written = 0;
+    if (mbedtls_base64_encode((unsigned char *)body + head.length(), b64Len, &written,
+                              jpg, jpgLen) != 0)
+    {
+        free(body);
+        Serial.println("OpenAI: base64 encoding failed.");
+        return 'E';
+    }
+    size_t bodyLen = head.length() + written;
+    memcpy(body + bodyLen, tail, strlen(tail));
+    bodyLen += strlen(tail);
+
+    WiFiClientSecure client;
+    client.setCACert(ROOT_CA_OPENAI);
+
+    HTTPClient http;
+    String url = String("https://") + OPENAI_HOST + OPENAI_PATH;
+    if (!http.begin(client, url))
+    {
+        free(body);
+        Serial.println("OpenAI: http.begin() failed.");
+        return 'E';
+    }
+    http.setConnectTimeout(5000);
+    http.setTimeout(10000);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Authorization", String("Bearer ") + OPENAI_API_KEY);
+
+    unsigned long startedAt = millis();
+    int status = http.POST((uint8_t *)body, bodyLen);
+    String response = http.getString();
+    http.end();
+    free(body);
+
+    if (status != 200)
+    {
+        Serial.printf("OpenAI: HTTP %d after %lu ms: %s\n", status, millis() - startedAt,
+                      response.substring(0, 300).c_str());
+        return 'E';
+    }
+
+    // Tiny fixed-shape reply; hand-parse the first "content" like jsonIntField() does.
+    int at = response.indexOf("\"content\":");
+    if (at < 0)
+    {
+        Serial.println("OpenAI: reply had no content field.");
+        return 'E';
+    }
+    String answer = response.substring(at + 10, at + 60);
+    answer.toUpperCase();
+
+    char verdict = answer.indexOf("TREE") >= 0     ? 'T'
+                   : answer.indexOf("OBJECT") >= 0 ? 'O'
+                                                   : 'E';
+    Serial.printf("OpenAI: %s in %lu ms (answer: %s)\n",
+                  verdict == 'T' ? "TREE" : verdict == 'O' ? "OBJECT" : "UNCLEAR",
+                  millis() - startedAt, answer.c_str());
+    return verdict;
+}
+
+void sendClassificationToAtmega(char verdict)
+{
+    AtmegaSerial.printf("<C,%c>\n", verdict);
+    AtmegaSerial.flush();
+    Serial.printf("ATmega TX: <C,%c>\n", verdict);
+}
+
+
+// =====================================================
 // STORE A SAMPLE (+ PHOTO)
 // =====================================================
 
@@ -676,9 +856,10 @@ void storeSample(bool ok, float t, float h, float l)
         }
     }
 
-    // Upload immediately: the rover has already moved on, so this only holds up the ESP32's
-    // own loop() (the local UART/portal/stream) for the few seconds the request takes, not
-    // the rover itself.
+    // The rover waits (showing "Classifying...") until this reply arrives, so classify and
+    // answer first, and only then spend time on the server upload.
+    sendClassificationToAtmega(classifyPhoto(slot.jpg, slot.jpgLen));
+
     uploadSampleToServer(slot.id, slot.ok, slot.t, slot.h, slot.l, slot.jpg, slot.jpgLen);
 
     historyHead = (historyHead + 1) % HISTORY_SIZE;
@@ -1492,9 +1673,9 @@ void setup()
     Serial.println("================================");
 
     // ---------- ATmega UART ----------
-    AtmegaSerial.begin(ATMEGA_BAUD, SERIAL_8N1, ATMEGA_RX_PIN, -1);
-    Serial.printf("ATmega UART RX = GPIO%d @ %d baud\n",
-                  ATMEGA_RX_PIN, ATMEGA_BAUD);
+    AtmegaSerial.begin(ATMEGA_BAUD, SERIAL_8N1, ATMEGA_RX_PIN, ATMEGA_TX_PIN);
+    Serial.printf("ATmega UART RX = GPIO%d, TX = GPIO%d @ %d baud\n",
+                  ATMEGA_RX_PIN, ATMEGA_TX_PIN, ATMEGA_BAUD);
 
     // ---------- Flash LED off ----------
     pinMode(FLASH_LED_GPIO, OUTPUT);

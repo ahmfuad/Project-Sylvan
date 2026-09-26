@@ -6,6 +6,7 @@
 
 static sample_phase_t cycle_phase;
 static uint8_t armed, near_object, clearing, dht_done, light_done, succeeded;
+static uint8_t classification;
 static uint32_t phase_started, clear_started;
 static int16_t sample_temp_c;
 static uint8_t sample_humidity;
@@ -45,10 +46,17 @@ uint8_t sample_cycle_observe(uint16_t distance_cm, uint32_t now)
 
 void sample_cycle_update(uint32_t now)
 {
+    uint8_t reply = uart_take_classification();
+    if (reply && (cycle_phase == SAMPLE_READINGS || cycle_phase == SAMPLE_CLASSIFYING))
+        classification = reply;
+
     if (cycle_phase == SAMPLE_ACQUIRING) {
         if ((!dht_done || !light_done) &&
             (uint32_t)(now - phase_started) < SAMPLE_ACQUIRE_TIMEOUT_MS) return;
         if (!dht_done || !light_done) succeeded = 0;
+        /* Drop any late reply from a previous stop before asking about this one. */
+        (void)uart_take_classification();
+        classification = 0;
         /* Motors are held; this transition runs exactly once per sampling stop. */
         if (succeeded) uart_send_sample(sample_temp_c, sample_humidity, sample_lux);
         else uart_send_sample_failed();
@@ -56,6 +64,11 @@ void sample_cycle_update(uint32_t now)
         phase_started = now;
     } else if (cycle_phase == SAMPLE_READINGS &&
                (uint32_t)(now - phase_started) >= SAMPLE_READINGS_TIME_MS) {
+        cycle_phase = SAMPLE_CLASSIFYING;
+        phase_started = now;
+    } else if (cycle_phase == SAMPLE_CLASSIFYING &&
+               (classification ||
+                (uint32_t)(now - phase_started) >= CLASSIFY_TIMEOUT_MS)) {
         cycle_phase = SAMPLE_RESULT;
         phase_started = now;
     } else if (cycle_phase == SAMPLE_RESULT &&
@@ -91,3 +104,4 @@ void sample_cycle_light_done(uint8_t success, uint16_t lux)
     succeeded &= success != 0;
 }
 uint8_t sample_cycle_succeeded(void) { return succeeded; }
+uint8_t sample_cycle_classification(void) { return classification; }

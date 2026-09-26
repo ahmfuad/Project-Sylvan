@@ -1,6 +1,7 @@
 #include "config.h"
 #include "uart.h"
 #include <avr/io.h>
+#include <avr/interrupt.h>
 
 /* Double-speed mode: baud = F_CPU / (8 * (UBRR + 1)), rounded to nearest. */
 #define UART_UBRR ((F_CPU + 4UL * UART_BAUD) / (8UL * UART_BAUD) - 1UL)
@@ -20,7 +21,45 @@ void uart_init(void)
     UBRRL = (uint8_t)UART_UBRR;
     UCSRA = (1 << U2X);
     UCSRC = (1 << URSEL) | (1 << UCSZ1) | (1 << UCSZ0);
-    UCSRB = (1 << TXEN);
+    UCSRB = (1 << TXEN) | (1 << RXEN) | (1 << RXCIE);
+}
+
+/* Receiver for the ESP32's "<C,x>\n" reply; x is T (tree), O (object) or E (error). */
+static volatile uint8_t classification;
+static uint8_t rx_pos;
+static char rx_code;
+
+void uart_rx_byte(char c)
+{
+    if (c == '<') { rx_pos = 1; return; }
+    switch (rx_pos) {
+    case 1: rx_pos = c == 'C' ? 2 : 0; break;
+    case 2: rx_pos = c == ',' ? 3 : 0; break;
+    case 3:
+        rx_code = c;
+        rx_pos = (c == 'T' || c == 'O' || c == 'E') ? 4 : 0;
+        break;
+    case 4:
+        if (c == '>') classification = (uint8_t)rx_code;
+        rx_pos = 0;
+        break;
+    default: break;
+    }
+}
+
+ISR(USART_RXC_vect)
+{
+    uart_rx_byte((char)UDR);
+}
+
+uint8_t uart_take_classification(void)
+{
+    uint8_t saved = SREG;
+    cli();
+    uint8_t value = classification;
+    classification = 0;
+    SREG = saved;
+    return value;
 }
 
 void uart_putc(char c)

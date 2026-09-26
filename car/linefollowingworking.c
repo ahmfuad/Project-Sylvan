@@ -121,28 +121,16 @@ static void set_metric(uint8_t row, const char *prefix, uint16_t value,
 
 static void update_display(uint32_t now)
 {
-    static uint8_t displayed_finished;
-    uint8_t finished = line_follow_is_finished();
 #if INTEGRATION_STAGE >= 6
     static sample_phase_t displayed_phase = SAMPLE_RESULT;
     sample_phase_t phase = sample_cycle_phase();
 #endif
     if (
-        displayed_finished != finished ||
 #if INTEGRATION_STAGE >= 6
         displayed_phase != phase ||
 #endif
         (uint32_t)(now - displayed_at) >= DISPLAY_INTERVAL_MS) {
         displayed_at = now;
-        displayed_finished = finished;
-        if (finished) {
-            /* Laps finished takes priority over whatever the sample
-             * cycle was showing -- the run is over, hold this screen. */
-            oled_set_line(0, "Run complete");
-            oled_set_line(1, "Laps finished");
-            oled_set_line(2, "Car is stopped");
-            oled_set_line(3, "");
-        } else {
 #if INTEGRATION_STAGE >= 6
         displayed_phase = phase;
         if (phase == SAMPLE_DRIVING) {
@@ -150,26 +138,11 @@ static void update_display(uint32_t now)
             oled_set_line(1, sample_cycle_near_object() ? "Object sampled" : "No object");
             oled_set_line(2, motor_is_driving() ? "Car is moving" : "Car is stopped");
             oled_set_line(3, "");
-        } else if (phase == SAMPLE_CLASSIFYING) {
-            oled_set_line(0, "Object Detected");
-            oled_set_line(1, "Classifying...");
-            oled_set_line(2, "Please wait");
-            oled_set_line(3, "Car is stopped");
         } else if (phase == SAMPLE_RESULT) {
-            /* 21 columns: "Random Object detected" needs two lines. */
-            uint8_t verdict = sample_cycle_classification();
-            if (verdict == 'T') {
-                oled_set_line(0, "Tree detected");
-                oled_set_line(1, "");
-            } else if (verdict == 'O') {
-                oled_set_line(0, "Random Object");
-                oled_set_line(1, "detected");
-            } else {
-                oled_set_line(0, "No result");
-                oled_set_line(1, "Check WiFi/API");
-            }
-            oled_set_line(2, sample_cycle_succeeded() ? "Sensors OK" : "Sensor failed");
-            oled_set_line(3, "Car is stopped");
+            oled_set_line(0, sample_cycle_succeeded() ? "Sample detected" : "Sample failed");
+            oled_set_line(1, sample_cycle_succeeded() ? "successfully" : "Check sensors");
+            oled_set_line(2, "Car is stopped");
+            oled_set_line(3, "");
         } else {
             uint8_t t_status = dht_status, l_status = light_status;
             if (phase == SAMPLE_READINGS) {
@@ -195,7 +168,6 @@ static void update_display(uint32_t now)
         set_metric(2, "L:", lux, "LX", light_status);
 #endif
 #endif
-        }
     }
     oled_service(now);
 }

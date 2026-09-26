@@ -1,4 +1,5 @@
 #include "config.h"
+#include "timebase.h"
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -51,90 +52,14 @@
 // =====================================================
 // TIMER0 SYSTEM CLOCK
 // =====================================================
+//
+// Timer0 setup, the millisecond counter, and its ISR
+// live in timebase.c (shared with twi.c/oled.c/bh1750.c).
+// Use timebase_init()/timebase_millis() here instead of
+// duplicating them, since only one ISR(TIMER0_COMP_vect)
+// may exist across the whole link.
 
-volatile uint32_t systemMillis = 0;
-
-
-/*
- * Timer0 compare interrupt occurs every 1 ms.
- */
-
-ISR(TIMER0_COMP_vect)
-{
-    systemMillis++;
-}
-
-
-uint32_t millis(void)
-{
-    uint32_t value;
-
-    /*
-     * systemMillis is 32-bit while ATmega32 is 8-bit.
-     *
-     * Disable interrupts very briefly so we don't read
-     * the variable halfway through an ISR update.
-     */
-
-    uint8_t oldSREG = SREG;
-
-    cli();
-
-    value = systemMillis;
-
-    SREG = oldSREG;
-
-    return value;
-}
-
-
-// =====================================================
-// TIMER0 INITIALIZATION
-// =====================================================
-
-void timer0Init(void)
-{
-    /*
-     * F_CPU = 1 MHz
-     *
-     * Timer0 prescaler = 8
-     *
-     * Timer frequency:
-     *
-     * 1,000,000 / 8
-     * = 125,000 Hz
-     *
-     * Timer tick:
-     *
-     * 1 / 125000
-     * = 8 us
-     *
-     * OCR0 = 124
-     *
-     * 125 counts × 8 us
-     * = exactly 1 ms
-     */
-
-
-    // CTC mode
-    // WGM01 = 1
-    //
-    // Prescaler = 8
-    // CS01 = 1
-
-    TCCR0 =
-          (1 << WGM01)
-        | (1 << CS01);
-
-
-    OCR0 = 124;
-
-    TCNT0 = 0;
-
-
-    // Enable Timer0 Compare Match interrupt
-    TIMSK |= (1 << OCIE0);
-}
+#define millis() timebase_millis()
 
 
 // =====================================================
@@ -411,7 +336,7 @@ int main(void)
 
     pwmInit();
 
-    timer0Init();
+    timebase_init();
 
 
     // Enable interrupts globally

@@ -33,13 +33,15 @@
 #define BH1750_ADDR 0x23
 /* ESP32-CAM link: PD1/TXD only, 8N1, U2X. Use 4800 if the RC oscillator drifts. */
 #define UART_BAUD 9600UL
-#define OBSTACLE_DISTANCE_CM 30U
+#define OBSTACLE_DISTANCE_CM 10U
 #define OBJECT_CLEAR_DISTANCE_CM 35U
 #define OBJECT_CLEAR_TIME_MS 500UL
 #define SAMPLE_ACQUIRE_TIMEOUT_MS 3000UL
 #define SAMPLE_LIGHT_SETTLE_MS 200UL
 #define SAMPLE_READINGS_TIME_MS 2000UL
 #define SAMPLE_RESULT_TIME_MS 2000UL
+/* Longest wait for the ESP32's tree/object verdict before showing "No result". */
+#define CLASSIFY_TIMEOUT_MS 20000UL
 #define HCSR04_INTERVAL_MS 80U
 #define HCSR04_TIMEOUT_US 30000UL
 #define DHT11_INTERVAL_MS 2000UL
@@ -80,10 +82,13 @@
 /*
  * Speed while pivoting left/right.
  *
- * Increase -> rotates faster.
- * Decrease -> gentler pivot.
+ * Pivoting spins both wheels in opposite directions, so each
+ * wheel scrubs sideways against the ground instead of rolling.
+ * That needs MORE torque than straight driving, not less, so
+ * this should not be set below BASE_SPEED_PERCENT or the rover
+ * can stall mid-turn.
  */
-#define PIVOT_SPEED_PERCENT      75U
+#define PIVOT_SPEED_PERCENT      100U
 
 
 /*
@@ -143,6 +148,28 @@
 // =====================================================
 
 #define START_DELAY_MS         1000U
+
+
+// =====================================================
+// LAP COUNTING (TIME-BASED)
+// =====================================================
+
+/*
+ * There is no physical marker/crossing on the track, so laps are
+ * counted by elapsed time instead of a detected event.
+ *
+ * Stopwatch how long ONE lap actually takes at this robot's normal
+ * driving speed on this track, and put that value in LAP_DURATION_MS.
+ * The robot then drives for LAPS_TO_RUN * LAP_DURATION_MS after it
+ * starts moving and stops immediately wherever it happens to be --
+ * it is not expected to stop back at the starting point.
+ *
+ * This drifts if lap time isn't consistent (e.g. obstacle stops from
+ * the sample-cycle feature, or motor speed sagging as the battery
+ * drains over a long run), so recalibrate after any speed change.
+ */
+#define LAP_DURATION_MS         8000UL  /* <-- measure your own lap and set this */
+#define LAPS_TO_RUN             3U
 
 
 #endif

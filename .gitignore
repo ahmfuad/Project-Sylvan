@@ -1,6 +1,7 @@
 # Secrets
 .env
 .env.local
+blink/api.txt
 
 # Runtime data (photos, database dumps)
 data/

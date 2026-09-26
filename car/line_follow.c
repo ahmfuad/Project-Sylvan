@@ -36,8 +36,9 @@ static uint8_t previousLeftBlack, previousRightBlack;
 static uint8_t firstOffSensor, lastTurn;
 static RobotState state;
 static uint32_t stateStartTime;
-static uint8_t starting, paused;
+static uint8_t starting, paused, finished;
 static uint32_t pause_started;
+static uint32_t runStartTime;
 
 void line_follow_init(uint32_t now)
 {
@@ -46,6 +47,7 @@ void line_follow_init(uint32_t now)
     state = STATE_STOP;
     starting = 1;
     paused = 0;
+    finished = 0;
     stateStartTime = now;
     motor_stop();
 }
@@ -57,22 +59,45 @@ void line_follow_set_paused(uint8_t hold, uint32_t now)
         paused = 1;
         motor_stop();
     } else if (paused) {
-        stateStartTime += (uint32_t)(now - pause_started);
+        uint32_t elapsed = (uint32_t)(now - pause_started);
+        stateStartTime += elapsed;
+        runStartTime += elapsed;
         paused = 0;
     }
 }
 
+uint8_t line_follow_is_finished(void)
+{
+    return finished;
+}
+
 void line_follow_update(uint32_t now)
 {
+    if (finished) { motor_stop(); return; }
     if (paused) { motor_stop(); return; }
     if (starting) {
         motor_stop();
         if ((uint32_t)(now - stateStartTime) < START_DELAY_MS) return;
         starting = 0;
         state = STATE_FOLLOW;
+        runStartTime = now;
         previousLeftBlack = line_left_on_black();
         previousRightBlack = line_right_on_black();
     }
+
+    /*
+     * No physical lap marker exists on the track, so laps are counted
+     * by elapsed driving time instead. Once the budget for LAPS_TO_RUN
+     * laps runs out, stop immediately wherever the robot happens to be.
+     */
+    if (!starting &&
+        (uint32_t)(now - runStartTime) >= (LAPS_TO_RUN * LAP_DURATION_MS))
+    {
+        finished = 1;
+        motor_stop();
+        return;
+    }
+
     uint8_t leftBlack = line_left_on_black();
     uint8_t rightBlack = line_right_on_black();
 
