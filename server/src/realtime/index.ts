@@ -8,6 +8,7 @@ import { WebSocketServer } from 'ws';
 import { isValidDeviceKey } from '../lib/auth.js';
 import { errorBody } from '../lib/errors.js';
 import type { DeviceEventStore } from '../services/deviceEvents.js';
+import type { DeviceLogStore } from '../services/deviceLogs.js';
 import type { EventBus } from '../services/events.js';
 import { DeviceChannel } from './deviceChannel.js';
 import { DeviceStatusTracker } from './deviceStatus.js';
@@ -105,6 +106,7 @@ export function createRealtime(deps: {
   config: RealtimeConfig;
   bus: EventBus;
   events: DeviceEventStore;
+  logs?: DeviceLogStore;
   deviceKey: string;
   log: FastifyBaseLogger;
   now?: () => number;
@@ -159,6 +161,7 @@ export function createRealtime(deps: {
   const device = new DeviceChannel({
     status,
     events,
+    ...(deps.logs ? { logs: deps.logs } : {}),
     log,
     maxFrameBytes: config.maxFrameBytes,
     targetFps: config.targetFps,
@@ -216,7 +219,7 @@ export function createRealtime(deps: {
     notifier.update(count);
   }
 
-  // The bus currently carries only `sample.created`, which viewers receive as-is.
+  // Bus events (sample.created, sample.updated, log.appended) go to every viewer as-is.
   const unsubscribe = bus.subscribe((event) => {
     viewers.broadcast(event);
   });
@@ -375,7 +378,7 @@ export function createRealtime(deps: {
           viewerServer.close(resolve);
         }),
       ]);
-      await events.flush();
+      await Promise.all([events.flush(), deps.logs?.flush()]);
     },
     activeTimers: () => timers + (notifier.hasTimer ? 1 : 0),
   };

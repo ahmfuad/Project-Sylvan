@@ -3,6 +3,7 @@ import { isValidDeviceKey } from '../lib/auth.js';
 import { AppError, errorBody } from '../lib/errors.js';
 import { RATE_LIMITS, hashDeviceKey } from '../lib/rateLimits.js';
 import {
+  parseClassificationBody,
   parseListQuery,
   parseSampleId,
   parseUploadId,
@@ -25,6 +26,7 @@ interface SampleRoutesOptions {
 interface ParsedUpload {
   readings: Readings | null;
   uploadId: string | null;
+  failReason: string | null;
 }
 
 declare module 'fastify' {
@@ -96,9 +98,9 @@ const uploadRoute: FastifyPluginAsync<SampleRoutesOptions> = async (app, options
   };
 
   const validate = async (request: FastifyRequest) => {
-    const { readings } = parseUploadQuery(request.query as Record<string, unknown>);
+    const { readings, failReason } = parseUploadQuery(request.query as Record<string, unknown>);
     const uploadId = parseUploadId(request.headers['x-upload-id']);
-    request.sampleUpload = { readings, uploadId };
+    request.sampleUpload = { readings, uploadId, failReason };
   };
 
   const replayDuplicate = async (request: FastifyRequest, reply: FastifyReply) => {
@@ -165,6 +167,53 @@ const uploadRoute: FastifyPluginAsync<SampleRoutesOptions> = async (app, options
   );
 };
 
+/**
+ * `POST /api/samples/classification`: the ESP32 reports the OpenAI verdict for a sample it has
+ * already uploaded, identified by the same `X-Upload-Id`. Kept in its own plugin because the
+ * upload plugin replaces the JSON body parser with a JPEG-only one.
+ */
+const classificationRoute: FastifyPluginAsync<SampleRoutesOptions> = async (app, options) => {
+  const { samples, events, deviceKey, hardening } = options;
+
+  app.post(
+    '/api/samples/classification',
+    {
+      config: hardening
+        ? {
+            rateLimit: {
+              ...RATE_LIMITS.uploadByKey,
+              keyGenerator: (request: FastifyRequest) => {
+                const key = request.headers['x-device-key'];
+                return typeof key === 'string'
+                  ? `classify-key:${hashDeviceKey(key)}`
+                  : `classify-ip:${request.ip}`;
+              },
+            },
+          }
+        : { rateLimit: false },
+    },
+    async (request, reply) => {
+      if (!isValidDeviceKey(request.headers['x-device-key'], deviceKey)) {
+        throw new AppError(401, 'UNAUTHORIZED', 'Missing or invalid device key');
+      }
+      const uploadId = parseUploadId(request.headers['x-upload-id']);
+      if (uploadId === null) {
+        throw new AppError(400, 'MISSING_UPLOAD_ID', 'X-Upload-Id header is required');
+      }
+      const { label, note } = parseClassificationBody(request.body);
+      const sample = await samples.classify(uploadId, label, note);
+      if (!sample) {
+        return reply
+          .code(404)
+          .send(errorBody('NOT_FOUND', 'No sample with this upload id (upload it first)'));
+      }
+      request.log.info({ sampleId: sample.id, label }, 'sample classified');
+      events.publish({ type: 'sample.updated', sample });
+      return sample;
+    },
+  );
+};
+
 const readRoutes: FastifyPluginAsync<{ samples: SamplesService }> = async (app, { samples }) => {
   app.get('/api/samples', async (request) => {
     return samples.list(parseListQuery(request.query as Record<string, unknown>));
@@ -187,5 +236,6 @@ const readRoutes: FastifyPluginAsync<{ samples: SamplesService }> = async (app, 
 
 export const sampleRoutes: FastifyPluginAsync<SampleRoutesOptions> = async (app, options) => {
   await app.register(uploadRoute, options);
+  await app.register(classificationRoute, options);
   await app.register(readRoutes, { samples: options.samples });
 };

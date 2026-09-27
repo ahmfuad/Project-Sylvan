@@ -24,7 +24,7 @@ set -euo pipefail
 # Configuration — edit these if your setup differs.
 # ---------------------------------------------------------------------------------------------
 DOMAIN="sylvan.daftar-e.com"
-REPO_URL="https://github.com/rayhannn2003/MicroController-Project.git"
+REPO_URL="https://github.com/ahmfuad/Project-Sylvan.git"
 BRANCH="main"
 DEPLOY_DIR="/opt/sylvan"
 APP_PORT=3100

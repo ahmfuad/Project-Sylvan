@@ -56,7 +56,7 @@ export function useSample(id: number | null) {
     queryKey: queryKeys.sample(id ?? -1),
     queryFn: ({ signal }) => api.sample(id ?? -1, signal),
     enabled: id !== null,
-    // Samples never change after upload.
+    // Samples change only when their photo verdict arrives, which the socket pushes.
     staleTime: Infinity,
   });
 }

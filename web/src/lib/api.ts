@@ -1,5 +1,7 @@
 import type {
   ApiError as ApiErrorBody,
+  DeviceLogsParams,
+  DeviceLogsResponse,
   DeviceStatus,
   ExploreResponse,
   ExportParams,
@@ -88,6 +90,9 @@ export const api = {
     request<StatsResponse>(`/api/stats${toQueryString({ ...params })}`, signal),
 
   device: (signal?: AbortSignal) => request<DeviceStatus>('/api/device', signal),
+
+  deviceLogs: (params: DeviceLogsParams, signal?: AbortSignal) =>
+    request<DeviceLogsResponse>(`/api/device/logs${toQueryString({ ...params })}`, signal),
 
   explore: (params: StatsParams & { bins?: number }, signal?: AbortSignal) =>
     request<ExploreResponse>(`/api/explore${toQueryString({ ...params })}`, signal),

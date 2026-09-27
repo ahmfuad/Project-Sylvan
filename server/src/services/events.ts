@@ -1,6 +1,9 @@
-import type { Sample } from '@sylvan/shared';
+import type { DeviceLog, Sample } from '@sylvan/shared';
 
-export type AppEvent = { type: 'sample.created'; sample: Sample };
+export type AppEvent =
+  | { type: 'sample.created'; sample: Sample }
+  | { type: 'sample.updated'; sample: Sample }
+  | { type: 'log.appended'; entries: DeviceLog[] };
 
 export type EventHandler = (event: AppEvent) => void;
 

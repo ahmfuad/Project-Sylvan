@@ -14,6 +14,7 @@ import { exportRoutes } from './routes/export.js';
 import { sampleRoutes } from './routes/samples.js';
 import { statsRoutes } from './routes/stats.js';
 import { createDeviceEventStore } from './services/deviceEvents.js';
+import { createDeviceLogStore } from './services/deviceLogs.js';
 import { createDiskUsageReporter } from './services/diskUsage.js';
 import { createEventBus, type EventBus } from './services/events.js';
 import { createExploreService } from './services/explore.js';
@@ -214,6 +215,29 @@ export async function buildApp({
         app.log.warn({ type }, 'device event rate limit reached; event not recorded');
       },
     });
+    const deviceLogs = createDeviceLogStore({
+      sql,
+      onStored: (entries) => {
+        events.publish({ type: 'log.appended', entries });
+      },
+      onError: (error) => {
+        app.log.error({ err: error }, 'could not store device log lines');
+      },
+      onDropped: (count) => {
+        app.log.warn({ count }, 'device log rate limit reached; lines dropped');
+      },
+    });
+    const prune = () => {
+      deviceLogs.prune().catch((error: unknown) => {
+        app.log.error({ err: error }, 'could not prune device logs');
+      });
+    };
+    prune();
+    const pruneTimer = setInterval(prune, 60 * 60 * 1000);
+    pruneTimer.unref();
+    app.addHook('onClose', () => {
+      clearInterval(pruneTimer);
+    });
     const viewerConnectionLimit = config.hardening
       ? (config.realtime.maxNewViewerConnectionsPerMinute ?? RATE_LIMITS.viewerConnectionsPerMinute)
       : config.realtime.maxNewViewerConnectionsPerMinute;
@@ -228,6 +252,7 @@ export async function buildApp({
       },
       bus: events,
       events: deviceEvents,
+      logs: deviceLogs,
       deviceKey: config.deviceKey,
       log: app.log,
     });
@@ -237,7 +262,11 @@ export async function buildApp({
     app.addHook('preClose', async () => {
       await active.close();
     });
-    await app.register(deviceRoutes, { getStatus: () => active.status(), events: deviceEvents });
+    await app.register(deviceRoutes, {
+      getStatus: () => active.status(),
+      events: deviceEvents,
+      logs: deviceLogs,
+    });
   }
   app.decorate('realtime', realtime);
 

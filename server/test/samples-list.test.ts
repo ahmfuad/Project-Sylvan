@@ -85,6 +85,10 @@ describe('GET /api/samples', () => {
       lux: null,
       photoUrl: null,
       photoBytes: null,
+      failReason: null,
+      classification: null,
+      classificationNote: null,
+      classifiedAt: null,
     });
   });
 

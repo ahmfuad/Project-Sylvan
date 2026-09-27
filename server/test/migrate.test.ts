@@ -22,6 +22,7 @@ describe('runMigrations', () => {
     expect(versions.map((row) => row.version)).toEqual([
       '001_create_samples.sql',
       '002_create_device_events.sql',
+      '003_classification_and_device_logs.sql',
     ]);
   });
 

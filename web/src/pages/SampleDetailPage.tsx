@@ -7,6 +7,7 @@ import { ReadingList } from '../components/ui/Readings';
 import { RelativeTime } from '../components/ui/RelativeTime';
 import { SamplePhoto } from '../components/ui/SamplePhoto';
 import { LoadingRegion, Skeleton } from '../components/ui/Skeleton';
+import { ClassificationBadge, describeFailReason } from '../components/ui/ClassificationBadge';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { ErrorState } from '../components/ui/States';
 import { isNotFound } from '../lib/api';
@@ -147,6 +148,7 @@ export default function SampleDetailPage() {
             Sample #{data.id}
           </h1>
           <StatusBadge ok={data.ok} className="text-sm" />
+          <ClassificationBadge sample={data} className="text-sm" />
         </div>
         <nav aria-label="Sample navigation" className="flex gap-2">
           {navLink(previousId, 'previous')}
@@ -184,6 +186,54 @@ export default function SampleDetailPage() {
               <dt className="text-ink-muted">UTC</dt>
               <dd>{formatUtc(data.createdAt)}</dd>
             </dl>
+          </Card>
+
+          <Card aria-labelledby="classification-heading" className="p-4 sm:p-6">
+            <h2 id="classification-heading" className="text-base font-semibold">
+              Photo classification
+            </h2>
+            {data.classification === null ? (
+              <p className="mt-2 text-sm text-ink-muted">
+                Waiting for the rover's verdict. It appears here on its own when it arrives.
+              </p>
+            ) : (
+              <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+                <dt className="text-ink-muted">Verdict</dt>
+                <dd>
+                  <ClassificationBadge sample={data} />
+                </dd>
+                {data.classificationNote && (
+                  <>
+                    <dt className="text-ink-muted">Details</dt>
+                    <dd className="break-words">{data.classificationNote}</dd>
+                  </>
+                )}
+                {data.classifiedAt && (
+                  <>
+                    <dt className="text-ink-muted">Classified</dt>
+                    <dd className="tabular">
+                      <RelativeTime value={data.classifiedAt} />
+                    </dd>
+                  </>
+                )}
+              </dl>
+            )}
+            {!data.ok && (
+              <div className="mt-4 border-t border-border pt-3 text-sm">
+                <p className="font-medium">Why the readings failed</p>
+                {data.failReason ? (
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5 text-ink-muted">
+                    {describeFailReason(data.failReason).map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-1 text-ink-muted">
+                    Not reported (sent by older rover firmware).
+                  </p>
+                )}
+              </div>
+            )}
           </Card>
 
           <Card aria-labelledby="readings-heading" className="p-4 sm:p-6">
