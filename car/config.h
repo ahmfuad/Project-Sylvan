@@ -171,5 +171,14 @@
 #define LAP_DURATION_MS         8000UL  /* <-- measure your own lap and set this */
 #define LAPS_TO_RUN             3U
 
+/*
+ * Switch for the lap limit above.
+ *
+ * 1 = normal: stop for good after LAPS_TO_RUN * LAP_DURATION_MS of driving.
+ * 0 = debugging: never stop on its own -- runs the line-following loop
+ *     forever (until power is cut or an obstacle/recovery state needs it).
+ */
+#define LAP_LIMIT_ENABLED       0
+
 
 #endif

@@ -85,6 +85,7 @@ void line_follow_update(uint32_t now)
         previousRightBlack = line_right_on_black();
     }
 
+#if LAP_LIMIT_ENABLED
     /*
      * No physical lap marker exists on the track, so laps are counted
      * by elapsed driving time instead. Once the budget for LAPS_TO_RUN
@@ -97,6 +98,8 @@ void line_follow_update(uint32_t now)
         motor_stop();
         return;
     }
+    /* LAP_LIMIT_ENABLED=0: run forever, ignore the lap clock. */
+#endif
 
     uint8_t leftBlack = line_left_on_black();
     uint8_t rightBlack = line_right_on_black();

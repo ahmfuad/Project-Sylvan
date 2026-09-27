@@ -13,6 +13,7 @@
 #include "mbedtls/base64.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 // =====================================================
 // PROJECT SYLVAN - ESP32-CAM
@@ -98,7 +99,7 @@ const char *FW_VERSION = "sylvan-esp32cam-1.1";
 // ---- OpenAI (tree vs. random object) ----
 // Paste your key here before uploading, and don't commit it: anyone with the board can read it
 // back out of flash, so give this key a monthly spending limit in the OpenAI dashboard.
-const char *OPENAI_API_KEY = "sample_key";
+const char *OPENAI_API_KEY = "sk-somekey";   // replace with your own key before uploading
 const char *OPENAI_HOST = "api.openai.com";
 const char *OPENAI_PATH = "/v1/chat/completions";
 //gpt 5.5
@@ -811,6 +812,80 @@ void sendClassificationToAtmega(char verdict)
 
 
 // =====================================================
+// ASYNC CLASSIFY (runs on the other core, in parallel with the upload)
+// =====================================================
+//
+// classifyPhoto() is a blocking HTTPS call that can take several seconds.
+// It used to run before uploadSampleToServer() in the same call stack, so
+// if it hung, timed out, or the task crashed under memory pressure (two
+// back-to-back TLS sessions plus the web/live-stream/WebSocket servers all
+// running), the server upload -- photo AND sensor readings -- never even
+// started. Running it on its own task means a problem with OpenAI can
+// never block or skip the website upload again.
+
+struct ClassifyJob
+{
+    uint8_t *jpg;   // this task's own copy; it frees it when done
+    size_t jpgLen;
+};
+
+volatile bool classifyTaskBusy = false;
+
+void classifyTaskFn(void *param)
+{
+    ClassifyJob *job = (ClassifyJob *)param;
+    char verdict = classifyPhoto(job->jpg, job->jpgLen);
+    sendClassificationToAtmega(verdict);
+    free(job->jpg);
+    free(job);
+    classifyTaskBusy = false;
+    vTaskDelete(nullptr);
+}
+
+// One classification in flight at a time: a second overlapping OpenAI/TLS session would
+// only add to the exact memory pressure this is meant to relieve, for an object the rover
+// has usually already left by the time the first one would finish anyway.
+void classifyAsync(const uint8_t *jpg, size_t jpgLen)
+{
+    if (jpg == nullptr || jpgLen == 0)
+    {
+        sendClassificationToAtmega('E');
+        return;
+    }
+    if (classifyTaskBusy)
+    {
+        Serial.println("Classify: previous photo still classifying, skipping this one.");
+        sendClassificationToAtmega('E');
+        return;
+    }
+
+    ClassifyJob *job = (ClassifyJob *)malloc(sizeof(ClassifyJob));
+    uint8_t *jpgCopy = job ? (uint8_t *)malloc(jpgLen) : nullptr;
+    if (job == nullptr || jpgCopy == nullptr)
+    {
+        Serial.println("Classify: out of memory copying the photo, skipping.");
+        free(job);
+        free(jpgCopy);
+        sendClassificationToAtmega('E');
+        return;
+    }
+    memcpy(jpgCopy, jpg, jpgLen);
+    job->jpg = jpgCopy;
+    job->jpgLen = jpgLen;
+
+    classifyTaskBusy = true;
+    if (xTaskCreatePinnedToCore(classifyTaskFn, "classify", 12288, job, 1, nullptr, 0) != pdPASS)
+    {
+        Serial.println("Classify: failed to start task, skipping.");
+        free(job->jpg);
+        free(job);
+        classifyTaskBusy = false;
+        sendClassificationToAtmega('E');
+    }
+}
+
+
+// =====================================================
 // STORE A SAMPLE (+ PHOTO)
 // =====================================================
 
@@ -856,10 +931,10 @@ void storeSample(bool ok, float t, float h, float l)
         }
     }
 
-    // The rover waits (showing "Classifying...") until this reply arrives, so classify and
-    // answer first, and only then spend time on the server upload.
-    sendClassificationToAtmega(classifyPhoto(slot.jpg, slot.jpgLen));
-
+    // Classify (OpenAI) and upload (website) now run at the same time on separate
+    // tasks/cores, so a slow or failing OpenAI call can no longer delay or block the
+    // upload -- the rover still waits for the classify reply, showing "Classifying...".
+    classifyAsync(slot.jpg, slot.jpgLen);
     uploadSampleToServer(slot.id, slot.ok, slot.t, slot.h, slot.l, slot.jpg, slot.jpgLen);
 
     historyHead = (historyHead + 1) % HISTORY_SIZE;
