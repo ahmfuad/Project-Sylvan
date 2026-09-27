@@ -60,6 +60,7 @@ docker run --rm \
   -v "$DEPLOY_DIR":/app -w /app \
   -v sylvan-npm-cache:/tmp/.npm \
   -e HOME=/tmp \
+  -e SYLVAN_COMMIT="$SHA" \
   node:22-alpine \
   sh -c "npm ci --include-workspace-root --workspace shared --workspace web --ignore-scripts --no-audit --no-fund && \
          npm run build -w shared && npm run build -w web -- --outDir dist.new --emptyOutDir"

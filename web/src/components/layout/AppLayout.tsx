@@ -86,6 +86,9 @@ function AppShell() {
       <main id="main" className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
         <Outlet />
       </main>
+      <footer className="mx-auto max-w-7xl px-4 pb-6 text-xs text-ink-muted sm:px-6">
+        Sylvan {__APP_VERSION__}
+      </footer>
       <BottomNav />
       <ScrollRestoration />
     </div>
