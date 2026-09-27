@@ -292,6 +292,33 @@ float pushedConfidence = -1;
 // True while a sample is being processed: live-view frames pause to free RAM for the upload.
 volatile bool sampleBusy = false;
 
+// Only one TLS connection may be set up at a time: a handshake needs a lot of internal RAM, and
+// an upload started while the server socket (re)connects fails at once with "connection refused".
+// loop() holds this around wsDevice.loop(); the sample task holds it for the whole upload.
+SemaphoreHandle_t tlsMutex = nullptr;
+
+// The local MJPEG stream on port 81 costs ~10 KB of internal RAM (its own server task) that the
+// uploads need. The dashboard's Live page does not use it. Set to true only for local debugging.
+const bool LOCAL_STREAM_SERVER = false;
+
+// ---- Reset recorder ---------------------------------------------------------------------
+// RTC memory survives a panic/watchdog reset (not a power cut), so after a crash the next boot
+// can report what the ESP32 was doing when it died. mark() is cheap: call it at each step.
+// One marker per task, so loop()'s frequent steps never hide what the sample task was doing.
+RTC_NOINIT_ATTR uint32_t crumbMagic;
+RTC_NOINIT_ATTR char crumbLoop[40];
+RTC_NOINIT_ATTR char crumbSample[40];
+const uint32_t CRUMB_MAGIC = 0x5E1A7A12;
+TaskHandle_t sampleTaskHandle = nullptr;
+
+void mark(const char *step)
+{
+    bool inSampleTask = sampleTaskHandle != nullptr &&
+                        xTaskGetCurrentTaskHandle() == sampleTaskHandle;
+    strlcpy(inSampleTask ? crumbSample : crumbLoop, step, sizeof(crumbLoop));
+    crumbMagic = CRUMB_MAGIC;
+}
+
 uint32_t nextSampleId = 1;
 uint32_t sampleCount = 0;     // successful samples
 uint32_t failedCount = 0;     // failed samples
@@ -710,9 +737,14 @@ bool startStreamServer()
 //
 // Retries once, with the SAME X-Upload-Id, only for a network error/timeout or a 5xx —
 // a 4xx means the request itself is wrong, and retrying an unchanged request cannot help.
+// `verdictOut` (optional) receives the server's verdict from the response ('T','O','U','E'), or 0
+// when the response carried none; the server waits up to ~10 s for it (?wait=verdict).
 bool uploadSampleToServer(const String &uploadId, bool ok, float t, float h, float l,
-                          const char *reason, const uint8_t *jpg, size_t jpgLen)
+                          const char *reason, const uint8_t *jpg, size_t jpgLen,
+                          char *verdictOut)
 {
+    if (verdictOut)
+        *verdictOut = 0;
     if (WiFi.status() != WL_CONNECTED)
     {
         LOGW("upload %s skipped: Wi-Fi not connected", uploadId.c_str());
@@ -733,6 +765,8 @@ bool uploadSampleToServer(const String &uploadId, bool ok, float t, float h, flo
     }
 
     bool hasPhoto = (jpg != nullptr && jpgLen > 0);
+    if (hasPhoto && verdictOut)
+        url += "&wait=verdict";
 
     for (uint8_t attempt = 1; attempt <= 2; attempt++)
     {
@@ -740,6 +774,7 @@ bool uploadSampleToServer(const String &uploadId, bool ok, float t, float h, flo
         client.setCACert(ROOT_CA_ISRG_X1);
 
         HTTPClient http;
+        mark("upload: connecting");
         if (!http.begin(client, url))
         {
             LOGE("upload %s: http.begin() failed (bad URL?)", uploadId.c_str());
@@ -760,11 +795,25 @@ bool uploadSampleToServer(const String &uploadId, bool ok, float t, float h, flo
 
         String body = http.getString();
         http.end();
+        mark("upload: done");
 
         if (status == 200 || status == 201)
         {
             LOGI("upload %s: HTTP %d in %lu ms (%u-byte photo)", uploadId.c_str(), status,
                  millis() - startedAt, (unsigned)(hasPhoto ? jpgLen : 0));
+            // {"id":46,"photo":true,"verdict":{"label":"tree","confidence":0.999}}
+            if (verdictOut && body.indexOf("\"verdict\":{") >= 0)
+            {
+                String label = jsonStringField(body, "label");
+                *verdictOut = label == "tree" ? 'T' : label == "object" ? 'O'
+                            : label == "unclear" ? 'U' : 'E';
+                int at = body.indexOf("\"confidence\":");
+                if (at >= 0 && body.indexOf("\"confidence\":null") < 0)
+                    LOGI("upload %s: server verdict %s (%.0f%% confident)", uploadId.c_str(),
+                         label.c_str(), body.substring(at + 13).toFloat() * 100);
+                else
+                    LOGI("upload %s: server verdict %s", uploadId.c_str(), label.c_str());
+            }
             return true;
         }
 
@@ -927,6 +976,7 @@ void sendLiveFrameIfDue()
 
     // waitTicks = 0: never block loop() for this — skip the tick if the camera is busy
     // with a sample photo or the local MJPEG stream, and try again next time.
+    mark("live view: capture");
     if (!captureJpeg(liveJpegQuality, &jpg, &jpgLen, 0, false))
         return;
 
@@ -934,6 +984,7 @@ void sendLiveFrameIfDue()
 
     if (jpgLen > 0 && jpgLen <= LIVE_MAX_FRAME_BYTES)
     {
+        mark("live view: send frame");
         wsDevice.sendBIN(jpg, jpgLen);
         liveStreamActive = true;
     }
@@ -1252,6 +1303,7 @@ void processSample(const SampleJob &job)
 
     uint8_t *jpg = nullptr;
     size_t jpgLen = 0;
+    mark("sample: photo");
     if (!cameraReady)
         LOGW("sample #%lu: camera not ready, no photo", (unsigned long)job.id);
     else if (captureJpeg(SAMPLE_JPEG_QUALITY, &jpg, &jpgLen, pdMS_TO_TICKS(3000), true))
@@ -1269,7 +1321,7 @@ void processSample(const SampleJob &job)
         verdict = result.code;
         sendClassificationToAtmega(verdict);
         uploaded = uploadSampleToServer(uploadId, job.ok, job.t, job.h, job.l, job.reason, jpg,
-                                        jpgLen);
+                                        jpgLen, nullptr);
         if (uploaded)
             postClassification(uploadId, result);
     }
@@ -1278,10 +1330,16 @@ void processSample(const SampleJob &job)
         LOGD("sample #%lu: uploading (free heap %u, largest internal block %u)",
              (unsigned long)job.id, (unsigned)ESP.getFreeHeap(),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        // Wait for the server socket to finish any handshake, then keep it quiet while we upload.
+        xSemaphoreTake(tlsMutex, portMAX_DELAY);
+        char fromResponse = 0;
         uploaded = uploadSampleToServer(uploadId, job.ok, job.t, job.h, job.l, job.reason, jpg,
-                                        jpgLen);
-        if (uploaded && jpg != nullptr)
-            verdict = waitForServerVerdict(job.id, startedAt);
+                                        jpgLen, &fromResponse);
+        xSemaphoreGive(tlsMutex);
+        if (uploaded && fromResponse != 0)
+            verdict = fromResponse;
+        else if (uploaded && jpg != nullptr)
+            verdict = waitForServerVerdict(job.id, startedAt);   // fallback: socket push
         else
             LOGW("sample #%lu: no verdict possible (%s)", (unsigned long)job.id,
                  uploaded ? "no photo" : "upload failed");
@@ -1303,6 +1361,7 @@ void sampleTask(void *)
     SampleJob job;
     for (;;)
     {
+        mark("sample task: idle");
         if (xQueueReceive(sampleQueue, &job, portMAX_DELAY) == pdTRUE)
             processSample(job);
     }
@@ -2191,12 +2250,28 @@ void setup()
                           : reset == ESP_RST_SW       ? "software restart"
                           : reset == ESP_RST_EXT      ? "reset pin"
                                                       : "other";
-    dlog(reset == ESP_RST_BROWNOUT || reset == ESP_RST_PANIC ? 'e' : 'i',
-         "ESP32 boot %lu, fw %s, reset: %s, PSRAM %s, free heap %u", (unsigned long)bootId,
-         FW_VERSION, resetText, psramFound() ? "yes" : "NO", (unsigned)ESP.getFreeHeap());
+    const char *wdtKind = reset == ESP_RST_INT_WDT ? " (interrupt watchdog)"
+                        : reset == ESP_RST_TASK_WDT ? " (task watchdog)"
+                        : reset == ESP_RST_WDT      ? " (other watchdog)"
+                                                    : "";
+    bool crashed = reset == ESP_RST_BROWNOUT || reset == ESP_RST_PANIC ||
+                   reset == ESP_RST_INT_WDT || reset == ESP_RST_TASK_WDT || reset == ESP_RST_WDT ||
+                   reset == ESP_RST_SW;
+    dlog(crashed ? 'e' : 'i', "ESP32 boot %lu, fw %s, reset: %s%s (code %d), PSRAM %s, free heap %u",
+         (unsigned long)bootId, FW_VERSION, resetText, wdtKind, (int)reset,
+         psramFound() ? "yes" : "NO", (unsigned)ESP.getFreeHeap());
+    if (crashed && crumbMagic == CRUMB_MAGIC)
+    {
+        crumbLoop[sizeof(crumbLoop) - 1] = '\0';
+        crumbSample[sizeof(crumbSample) - 1] = '\0';
+        LOGE("previous run stopped during: loop at [%s], sample task at [%s]", crumbLoop,
+             crumbSample);
+    }
+    crumbLoop[0] = crumbSample[0] = '\0';
+    mark("setup");
 
     // ---------- ATmega UART ----------
-    AtmegaSerial.setRxBufferSize(1024);   // ATmega debug lines can arrive while loop() is busy
+    AtmegaSerial.setRxBufferSize(512);    // ATmega debug lines can arrive while loop() is busy
     AtmegaSerial.begin(ATMEGA_BAUD, SERIAL_8N1, ATMEGA_RX_PIN, ATMEGA_TX_PIN);
     LOGI("ATmega UART RX = GPIO%d, TX = GPIO%d @ %d baud", ATMEGA_RX_PIN, ATMEGA_TX_PIN,
          ATMEGA_BAUD);
@@ -2207,6 +2282,7 @@ void setup()
 
     // ---------- Camera ----------
     cameraMutex = xSemaphoreCreateMutex();
+    tlsMutex = xSemaphoreCreateMutex();
 
     if (initCamera())
     {
@@ -2219,7 +2295,8 @@ void setup()
     // ---------- Sample pipeline ----------
     sampleQueue = xQueueCreate(4, sizeof(SampleJob));
     if (sampleQueue == nullptr ||
-        xTaskCreatePinnedToCore(sampleTask, "samples", 16384, nullptr, 1, nullptr, 1) != pdPASS)
+        xTaskCreatePinnedToCore(sampleTask, "samples", 12288, nullptr, 1, &sampleTaskHandle, 1) !=
+            pdPASS)
         LOGE("could not start the sample task: samples will not be processed");
 
     // ---------- Wi-Fi events into the debug trail ----------
@@ -2299,7 +2376,7 @@ void setup()
     }
 
     // ---------- Live stream server (port 81) ----------
-    if (cameraReady)
+    if (cameraReady && LOCAL_STREAM_SERVER)
         streamReady = startStreamServer();
 
     // ---------- Portal server (port 80) ----------
@@ -2321,9 +2398,17 @@ void setup()
 
 void loop()
 {
+    mark("loop: uart");
     readAtmegaUART();
     server.handleClient();
-    wsDevice.loop();
+    // Skip the socket's turn while an upload holds the TLS lock (a few seconds at most); the
+    // server tolerates missed pings for ~40 s.
+    if (xSemaphoreTake(tlsMutex, 0) == pdTRUE)
+    {
+        mark("loop: server socket");
+        wsDevice.loop();
+        xSemaphoreGive(tlsMutex);
+    }
     sendLiveHeartbeatIfDue();
     flushLogsIfDue(wsDevice.isConnected());
     sendLiveFrameIfDue();
