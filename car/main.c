@@ -12,6 +12,58 @@
 #if INTEGRATION_STAGE >= 6
 #include "sample_cycle.h"
 #include "uart.h"
+#include <avr/io.h>
+#include <avr/pgmspace.h>
+
+/* Debug trail: reset cause, heartbeat and line-lost transitions (see uart.h for the format). */
+static void log_boot(uint8_t reset_flags)
+{
+    dbg_t d;
+    /* A brown-out reset means the 5 V rail sagged (e.g. motor current): worth a warning. */
+    dbg_start(&d, (reset_flags & (1 << BORF)) ? 'w' : 'i');
+    dbg_p(&d, PSTR("ATmega boot, reset:"));
+    if (reset_flags & (1 << PORF)) dbg_p(&d, PSTR(" power-on"));
+    if (reset_flags & (1 << EXTRF)) dbg_p(&d, PSTR(" reset-pin"));
+    if (reset_flags & (1 << BORF)) dbg_p(&d, PSTR(" BROWN-OUT"));
+    if (reset_flags & (1 << WDRF)) dbg_p(&d, PSTR(" watchdog"));
+    if (reset_flags & (1 << JTRF)) dbg_p(&d, PSTR(" jtag"));
+    if (!(reset_flags & 0x1F)) dbg_p(&d, PSTR(" unknown"));
+    dbg_send(&d);
+}
+
+static void log_heartbeat(uint32_t now)
+{
+    static const char phases[] PROGMEM = "DARCS"; /* driving acquiring readings classifying result */
+    dbg_t d;
+    dbg_start(&d, 'd');
+    dbg_p(&d, PSTR("hb up="));
+    dbg_u(&d, (uint16_t)(now / 1000UL));
+    dbg_p(&d, PSTR("s phase="));
+    char phase[2] = { (char)pgm_read_byte(&phases[sample_cycle_phase()]), 0 };
+    dbg_s(&d, phase);
+    dbg_p(&d, line_follow_is_lost() ? PSTR(" line=LOST") : PSTR(" line=ok"));
+    dbg_p(&d, PSTR(" i2cErr="));
+    dbg_u(&d, twi_error_count());
+    dbg_p(&d, PSTR(" logDrop="));
+    dbg_u(&d, dbg_dropped());
+    dbg_send(&d);
+}
+
+static void update_trail(uint32_t now)
+{
+    static uint32_t heartbeat_at;
+    static uint8_t was_lost;
+    uint8_t lost = line_follow_is_lost();
+    if (lost != was_lost) {
+        was_lost = lost;
+        dbg_msg(lost ? 'w' : 'i', lost ? PSTR("line lost: search timed out, motors stopped")
+                                       : PSTR("line found again, following"));
+    }
+    if ((uint32_t)(now - heartbeat_at) >= DEBUG_HEARTBEAT_MS) {
+        heartbeat_at = now;
+        log_heartbeat(now);
+    }
+}
 #endif
 
 #if INTEGRATION_STAGE >= 4
@@ -62,16 +114,34 @@ static uint8_t update_environment(uint32_t now)
 #if INTEGRATION_STAGE >= 4
     if (
 #if INTEGRATION_STAGE >= 6
-        sample_cycle_needs_dht() &&
+        sample_cycle_needs_dht(now) &&
 #endif
         (uint32_t)(now - dht_sampled_at) >= DHT11_INTERVAL_MS) {
         dht_sampled_at = now;
         motor_stop();
         timebase_pause();
-        dht_status = dht11_read(&temperature, &humidity) == 0 ? 1 : 2;
+        uint8_t code = dht11_read(&temperature, &humidity);
         timebase_resume();
+        dht_status = code == 0 ? 1 : 2;
 #if INTEGRATION_STAGE >= 6
-        sample_cycle_dht_done(dht_status == 1, temperature, humidity);
+        {
+            dbg_t d;
+            dbg_start(&d, code == 0 ? 'i' : 'w');
+            if (code == 0) {
+                dbg_p(&d, PSTR("DHT11 ok T="));
+                dbg_u(&d, temperature);
+                dbg_p(&d, PSTR("C H="));
+                dbg_u(&d, humidity);
+                dbg_p(&d, PSTR("%"));
+            } else {
+                dbg_p(&d, PSTR("DHT11 FAIL code="));
+                dbg_u(&d, code);
+                dbg_p(&d, code <= 3 ? PSTR(" (no response)") : code == 4 ? PSTR(" (bit timeout)")
+                                                                          : PSTR(" (checksum)"));
+            }
+            dbg_send(&d);
+        }
+        sample_cycle_dht_done(code, temperature, humidity);
 #endif
         return 1;
     }
@@ -83,7 +153,12 @@ static uint8_t update_environment(uint32_t now)
     if (bh1750_state() == BH1750_OFF &&
         (uint32_t)(now - light_attempt) >= PERIPHERAL_RETRY_MS) {
         light_attempt = now;
-        if (!bh1750_init()) light_status = 2;
+        if (!bh1750_init()) {
+            light_status = 2;
+#if INTEGRATION_STAGE >= 6
+            dbg_msg('w', PSTR("BH1750 init failed (I2C), retrying in 1 s"));
+#endif
+        }
         return 1;
     }
     if (bh1750_state() == BH1750_READY &&
@@ -95,6 +170,18 @@ static uint8_t update_environment(uint32_t now)
 #endif
         light_status = bh1750_read_lux(&lux) ? 1 : 2;
 #if INTEGRATION_STAGE >= 6
+        {
+            dbg_t d;
+            dbg_start(&d, light_status == 1 ? 'i' : 'w');
+            if (light_status == 1) {
+                dbg_p(&d, PSTR("BH1750 ok L="));
+                dbg_u(&d, lux);
+                dbg_p(&d, PSTR(" lx"));
+            } else {
+                dbg_p(&d, PSTR("BH1750 read FAIL (I2C)"));
+            }
+            dbg_send(&d);
+        }
         sample_cycle_light_done(light_status == 1, lux);
 #endif
         if (light_status == 2) light_attempt = timebase_millis();
@@ -164,6 +251,9 @@ static void update_display(uint32_t now)
             } else if (verdict == 'O') {
                 oled_set_line(0, "Random Object");
                 oled_set_line(1, "detected");
+            } else if (verdict == 'U') {
+                oled_set_line(0, "Unclear photo");
+                oled_set_line(1, "");
             } else {
                 oled_set_line(0, "No result");
                 oled_set_line(1, "Check WiFi/API");
@@ -203,6 +293,11 @@ static void update_display(uint32_t now)
 
 int main(void)
 {
+#if INTEGRATION_STAGE >= 6
+    /* Read and clear the reset cause first, so the next reset reports only its own cause. */
+    uint8_t reset_flags = MCUCSR;
+    MCUCSR = 0;
+#endif
     motor_init();
     line_sensor_init();
     timebase_init();
@@ -232,10 +327,14 @@ int main(void)
     hcsr04_init();
     ping_started = timebase_millis() - HCSR04_INTERVAL_MS;
 #endif
+#if INTEGRATION_STAGE >= 6
+    log_boot(reset_flags);
+#endif
     for (;;) {
         uint32_t now = timebase_millis();
 #if INTEGRATION_STAGE >= 6
         sample_cycle_update(now);
+        update_trail(now);
 #endif
         line_follow_update(now);
 #if INTEGRATION_STAGE >= 5

@@ -4,6 +4,10 @@
 #include <avr/io.h>
 
 /* Transactions retained from lightTemSr.c. Call with interrupts enabled. */
+static uint16_t errors;
+uint16_t twi_error_count(void) { return errors; }
+static uint8_t fail(void) { errors++; return 0; }
+
 static uint8_t twi_wait(void)
 {
     uint32_t start = timebase_millis();
@@ -22,12 +26,12 @@ void twi_init(void)
     TWSR = 0x00;
 
     /*
-       1 MHz CPU
-       TWBR = 2
-       about 50 kHz I2C
+       1 MHz CPU, TWBR = 10: SCL = F_CPU / (16 + 2 * TWBR) = about 28 kHz.
+       The ATmega32 datasheet requires TWBR >= 10 in master mode; lower values
+       can corrupt SDA/SCL output (the previous TWBR = 2 violated this).
     */
 
-    TWBR = 2;
+    TWBR = 10;
 
     TWCR = (1 << TWEN);
 }
@@ -41,7 +45,7 @@ uint8_t twi_start(uint8_t address)
         (1 << TWEN);
 
     if (!twi_wait())
-        return 0;
+        return fail();
 
 
     uint8_t status =
@@ -51,7 +55,7 @@ uint8_t twi_start(uint8_t address)
         status != 0x08 &&
         status != 0x10
     )
-        return 0;
+        return fail();
 
 
     TWDR = address;
@@ -61,7 +65,7 @@ uint8_t twi_start(uint8_t address)
         (1 << TWEN);
 
     if (!twi_wait())
-        return 0;
+        return fail();
 
 
     status =
@@ -71,12 +75,12 @@ uint8_t twi_start(uint8_t address)
     if ((address & 1) == 0)
     {
         if (status != 0x18)
-            return 0;
+            return fail();
     }
     else
     {
         if (status != 0x40)
-            return 0;
+            return fail();
     }
 
 
@@ -93,7 +97,7 @@ uint8_t twi_write(uint8_t data)
         (1 << TWEN);
 
     if (!twi_wait())
-        return 0;
+        return fail();
 
 
     return (
@@ -110,7 +114,7 @@ uint8_t twi_read_ack(uint8_t *data)
         (1 << TWEA);
 
     if (!twi_wait() || (TWSR & 0xF8) != 0x50)
-        return 0;
+        return fail();
 
 
     *data = TWDR;
@@ -126,7 +130,7 @@ uint8_t twi_read_nack(uint8_t *data)
         (1 << TWEN);
 
     if (!twi_wait() || (TWSR & 0xF8) != 0x58)
-        return 0;
+        return fail();
 
 
     *data = TWDR;
@@ -143,7 +147,7 @@ uint8_t twi_stop(void)
         if ((uint32_t)(timebase_millis() - start) >= TWI_TIMEOUT_MS) {
             TWCR = 0; /* Release the peripheral after a stuck transaction. */
             TWCR = (1 << TWEN);
-            return 0;
+            return fail();
         }
     }
     return 1;

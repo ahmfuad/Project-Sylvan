@@ -31,12 +31,17 @@
 #define TWI_SDA_PIN PC1
 #define OLED_ADDR 0x3C
 #define BH1750_ADDR 0x23
-/* ESP32-CAM link: PD1/TXD only, 8N1, U2X. Use 4800 if the RC oscillator drifts. */
+/* ESP32-CAM link: PD1/TXD out, PD0/RXD in, 8N1, U2X. Note: the internal RC oscillator's
+ * drift is a percentage error, so a lower baud rate does NOT make the link more tolerant;
+ * calibrate OSCCAL or use a crystal if packets arrive garbled. */
 #define UART_BAUD 9600UL
 #define OBSTACLE_DISTANCE_CM 10U
 #define OBJECT_CLEAR_DISTANCE_CM 35U
 #define OBJECT_CLEAR_TIME_MS 500UL
-#define SAMPLE_ACQUIRE_TIMEOUT_MS 3000UL
+/* Long enough for a DHT11 retry: settle + first read + 2 s interval + second read. */
+#define SAMPLE_ACQUIRE_TIMEOUT_MS 4500UL
+#define SAMPLE_DHT_SETTLE_MS 300UL
+#define DHT11_MAX_ATTEMPTS 2U
 #define SAMPLE_LIGHT_SETTLE_MS 200UL
 #define SAMPLE_READINGS_TIME_MS 2000UL
 #define SAMPLE_RESULT_TIME_MS 2000UL
@@ -48,6 +53,8 @@
 #define BH1750_INTERVAL_MS 500UL
 #define DISPLAY_INTERVAL_MS 200UL
 #define PERIPHERAL_RETRY_MS 1000UL
+/* Debug trail heartbeat to the ESP32 (proves the ATmega is alive and shows counters). */
+#define DEBUG_HEARTBEAT_MS 10000UL
 #define TWI_TIMEOUT_MS 2U
 
 // =====================================================
@@ -167,7 +174,11 @@
  * This drifts if lap time isn't consistent (e.g. obstacle stops from
  * the sample-cycle feature, or motor speed sagging as the battery
  * drains over a long run), so recalibrate after any speed change.
+ *
+ * LAP_LIMIT_ENABLED: 1 = stop for good after the laps above,
+ *                    0 = drive forever (lap settings are ignored).
  */
+#define LAP_LIMIT_ENABLED       0
 #define LAP_DURATION_MS         8000UL  /* <-- measure your own lap and set this */
 #define LAPS_TO_RUN             3U
 

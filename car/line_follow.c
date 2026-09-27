@@ -66,6 +66,11 @@ void line_follow_set_paused(uint8_t hold, uint32_t now)
     }
 }
 
+uint8_t line_follow_is_lost(void)
+{
+    return !starting && !paused && !finished && state == STATE_STOP;
+}
+
 uint8_t line_follow_is_finished(void)
 {
     return finished;
@@ -90,6 +95,7 @@ void line_follow_update(uint32_t now)
      * by elapsed driving time instead. Once the budget for LAPS_TO_RUN
      * laps runs out, stop immediately wherever the robot happens to be.
      */
+#if LAP_LIMIT_ENABLED
     if (!starting &&
         (uint32_t)(now - runStartTime) >= (LAPS_TO_RUN * LAP_DURATION_MS))
     {
@@ -97,6 +103,7 @@ void line_follow_update(uint32_t now)
         motor_stop();
         return;
     }
+#endif
 
     uint8_t leftBlack = line_left_on_black();
     uint8_t rightBlack = line_right_on_black();
