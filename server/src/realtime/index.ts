@@ -1,7 +1,12 @@
 import type { IncomingMessage, Server } from 'node:http';
 import { STATUS_CODES } from 'node:http';
 import type { Duplex } from 'node:stream';
-import type { DeviceStatus, StreamState, StreamStopReason } from '@sylvan/shared';
+import type {
+  DeviceStatus,
+  ServerVerdictMessage,
+  StreamState,
+  StreamStopReason,
+} from '@sylvan/shared';
 import proxyAddr from '@fastify/proxy-addr';
 import type { FastifyBaseLogger } from 'fastify';
 import { WebSocketServer } from 'ws';
@@ -168,6 +173,7 @@ export function createRealtime(deps: {
     jpegQuality: config.jpegQuality,
     onConnected: () => {
       notifier.deviceConnected();
+      resendRecentVerdicts();
       if (relay.watcherCount > 0) {
         streamLive = false;
         viewers.broadcastToWatchers({ type: 'stream.state', ...streamState() });
@@ -220,9 +226,22 @@ export function createRealtime(deps: {
   }
 
   // Bus events (sample.created, sample.updated, log.appended) go to every viewer as-is.
+  // Verdicts from the last 2 minutes, re-sent when the device reconnects: its socket often
+  // drops while it uploads (low RAM), which is exactly when a verdict is published.
+  const RECENT_VERDICT_MS = 120_000;
+  const recentVerdicts: { message: ServerVerdictMessage; at: number }[] = [];
+  const resendRecentVerdicts = () => {
+    const cutoff = now() - RECENT_VERDICT_MS;
+    for (const { message, at } of recentVerdicts) {
+      if (at >= cutoff) device.send(message);
+    }
+  };
+
   const unsubscribe = bus.subscribe((event) => {
     if (event.type === 'verdict.ready') {
       const { uploadId, label, confidence } = event;
+      recentVerdicts.push({ message: { type: 'verdict', uploadId, label, confidence }, at: now() });
+      if (recentVerdicts.length > 10) recentVerdicts.shift();
       if (device.send({ type: 'verdict', uploadId, label, confidence }))
         log.info({ uploadId, label }, 'sent photo verdict to device');
       return;

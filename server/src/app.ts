@@ -33,6 +33,8 @@ export type AppConfig = Pick<
   Partial<Pick<Config, 'displayTimezone' | 'publicBaseUrl' | 'openai'>> & {
     /** Test hook: classify photos with this instead of OpenAI (enables the worker). */
     photoClassifier?: PhotoClassifier;
+    /** Longest `?wait=verdict` upload wait (default 10 s). */
+    verdictWaitMs?: number;
     /** Test hook: worker timing overrides. */
     classificationWorker?: { retryDelayMs?: number; idleMs?: number; maxAttempts?: number };
     /** Enables the WebSocket channels. Off unless set, so HTTP-only tests are unaffected. */
@@ -321,6 +323,7 @@ export async function buildApp({
           onPhotoStored: () => {
             worker.kick();
           },
+          verdictWaitMs: config.verdictWaitMs ?? 10_000,
         }
       : {}),
   });

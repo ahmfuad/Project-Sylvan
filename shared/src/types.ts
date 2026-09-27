@@ -62,6 +62,11 @@ export interface SampleListResponse {
 export interface UploadResponse {
   id: number;
   photo: boolean;
+  /**
+   * Only with `?wait=verdict`: the server's photo verdict, or null when it was not ready within
+   * the wait (or there is no photo / classification is off).
+   */
+  verdict?: { label: Classification; confidence: number | null } | null;
 }
 
 export type SampleStatusFilter = 'all' | 'ok' | 'failed';

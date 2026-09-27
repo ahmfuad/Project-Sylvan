@@ -53,6 +53,10 @@ export interface SamplesService {
   neighbors(id: string): Promise<NeighborsResponse | null>;
   /** Sets the photo verdict for an upload; returns the updated sample, or null if unknown. */
   classify(uploadId: string, label: Classification, note: string | null): Promise<Sample | null>;
+  /** The server's photo verdict for an upload, if it has one yet. */
+  aiVerdictFor(
+    uploadId: string,
+  ): Promise<{ label: Classification; confidence: number | null } | null>;
 }
 
 const toNumber = (value: string | null) => (value === null ? null : Number(value));
@@ -217,6 +221,13 @@ export function createSamplesService(deps: {
         previousId: row.previous_id === null ? null : Number(row.previous_id),
         nextId: row.next_id === null ? null : Number(row.next_id),
       };
+    },
+
+    async aiVerdictFor(uploadId) {
+      const [row] = await sql<{ ai_label: Classification | null; ai_confidence: number | null }[]>`
+        SELECT ai_label, ai_confidence FROM samples WHERE upload_id = ${uploadId}
+      `;
+      return row?.ai_label ? { label: row.ai_label, confidence: row.ai_confidence } : null;
     },
 
     async classify(uploadId, label, note) {

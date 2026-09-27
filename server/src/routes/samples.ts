@@ -12,6 +12,7 @@ import {
 } from '../lib/validation.js';
 import { isJpeg } from '../services/photoStorage.js';
 import type { EventBus } from '../services/events.js';
+import type { Classification } from '@sylvan/shared';
 import type { SamplesService } from '../services/samples.js';
 
 interface SampleRoutesOptions {
@@ -23,6 +24,24 @@ interface SampleRoutesOptions {
   hardening?: boolean;
   /** Called after a new sample with a photo is stored (wakes the classification worker). */
   onPhotoStored?: () => void;
+  /** Longest `?wait=verdict` wait; 0 disables waiting (no classifier configured). */
+  verdictWaitMs?: number;
+}
+
+/** Resolves with the verdict for uploadId once published on the bus, or null after timeoutMs. */
+function waitForVerdict(events: EventBus, uploadId: string, timeoutMs: number) {
+  return new Promise<{ label: Classification; confidence: number | null } | null>((resolve) => {
+    const timer = setTimeout(() => {
+      unsubscribe();
+      resolve(null);
+    }, timeoutMs);
+    const unsubscribe = events.subscribe((event) => {
+      if (event.type !== 'verdict.ready' || event.uploadId !== uploadId) return;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve({ label: event.label, confidence: event.confidence });
+    });
+  });
 }
 
 interface ParsedUpload {
@@ -39,7 +58,15 @@ declare module 'fastify' {
 
 /** `POST /api/samples`, the fixed contract used by the ESP32-CAM firmware. */
 const uploadRoute: FastifyPluginAsync<SampleRoutesOptions> = async (app, options) => {
-  const { samples, events, deviceKey, maxPhotoBytes, hardening, onPhotoStored } = options;
+  const {
+    samples,
+    events,
+    deviceKey,
+    maxPhotoBytes,
+    hardening,
+    onPhotoStored,
+    verdictWaitMs = 0,
+  } = options;
 
   app.decorateRequest('sampleUpload', null);
 
@@ -114,6 +141,16 @@ const uploadRoute: FastifyPluginAsync<SampleRoutesOptions> = async (app, options
       { uploadId, sampleId: existing.id },
       'duplicate upload id, returning existing',
     );
+    if (
+      (request.query as Record<string, unknown>).wait === 'verdict' &&
+      existing.photo &&
+      verdictWaitMs > 0
+    ) {
+      // Subscribe before reading, so a verdict published in between is not missed.
+      const verdictReady = waitForVerdict(events, uploadId, verdictWaitMs);
+      const verdict = (await samples.aiVerdictFor(uploadId)) ?? (await verdictReady);
+      return reply.code(200).send({ ...existing, verdict });
+    }
     return reply.code(200).send(existing);
   };
 
@@ -153,6 +190,17 @@ const uploadRoute: FastifyPluginAsync<SampleRoutesOptions> = async (app, options
         { sampleId: result.response.id, created: result.created, photoBytes: photo?.length ?? 0 },
         result.created ? 'sample stored' : 'duplicate upload id resolved after race',
       );
+      // `?wait=verdict`: hold the response until the photo is classified (about a second), so
+      // the rover gets its verdict on this same connection instead of relying on its socket.
+      const wantsVerdict =
+        (request.query as Record<string, unknown>).wait === 'verdict' &&
+        upload.uploadId !== null &&
+        result.response.photo &&
+        verdictWaitMs > 0;
+      const verdictReady =
+        wantsVerdict && upload.uploadId
+          ? waitForVerdict(events, upload.uploadId, verdictWaitMs)
+          : null;
       if (result.created && result.response.photo) onPhotoStored?.();
       if (result.created && events.hasSubscribers()) {
         // The insert has committed; announce it without delaying the device's response.
@@ -164,6 +212,11 @@ const uploadRoute: FastifyPluginAsync<SampleRoutesOptions> = async (app, options
             request.log.error({ err: error }, 'could not publish sample.created');
           },
         );
+      }
+      if (verdictReady && upload.uploadId) {
+        // A retried upload may already have its verdict stored.
+        const verdict = (await samples.aiVerdictFor(upload.uploadId)) ?? (await verdictReady);
+        return reply.code(result.created ? 201 : 200).send({ ...result.response, verdict });
       }
       return reply.code(result.created ? 201 : 200).send(result.response);
     },

@@ -213,6 +213,77 @@ describe('classification worker', () => {
     );
   });
 
+  it('returns the verdict in the upload response with ?wait=verdict, also on a retry', async () => {
+    ctx = await createRealtimeContext({
+      photoClassifier: fake(() => ({ label: 'tree', confidence: 0.99, model: 'm', note: 'TREE' })),
+    });
+    await resetDatabase(ctx.sql);
+    const send = async () =>
+      ctx.app.inject({
+        method: 'POST',
+        url: '/api/samples?ok=1&t=30&h=60&l=100&wait=verdict',
+        headers: { ...uploadHeaders({ 'x-upload-id': 'w-1' }), 'content-type': 'image/jpeg' },
+        payload: await fixtureJpeg(),
+      });
+    const first = await send();
+    expect(first.statusCode).toBe(201);
+    expect(first.json()).toEqual({
+      id: 1,
+      photo: true,
+      verdict: { label: 'tree', confidence: 0.99 },
+    });
+    // The rover retries when a response is lost: same upload id, same sample, same verdict.
+    const retry = await send();
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toEqual({
+      id: 1,
+      photo: true,
+      verdict: { label: 'tree', confidence: 0.99 },
+    });
+  });
+
+  it('answers verdict null when classification takes longer than the wait', async () => {
+    ctx = await createRealtimeContext({
+      verdictWaitMs: 50,
+      photoClassifier: fake(
+        () =>
+          new Promise((resolve) =>
+            setTimeout(() => {
+              resolve({ label: 'object', confidence: 0.5, model: 'm', note: 'OBJECT' });
+            }, 300),
+          ),
+      ),
+    });
+    await resetDatabase(ctx.sql);
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/samples?ok=1&t=30&h=60&l=100&wait=verdict',
+      headers: { ...uploadHeaders({ 'x-upload-id': 'slow-1' }), 'content-type': 'image/jpeg' },
+      payload: await fixtureJpeg(),
+    });
+    expect(res.json()).toEqual({ id: 1, photo: true, verdict: null });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  });
+
+  it('re-sends a recent verdict when the rover reconnects', async () => {
+    ctx = await createRealtimeContext({
+      photoClassifier: fake(() => ({
+        label: 'object',
+        confidence: 0.9,
+        model: 'm',
+        note: 'OBJECT',
+      })),
+    });
+    await resetDatabase(ctx.sql);
+    await upload('gone-1'); // classified while the rover was offline
+    await until(async () => (await sampleOf(1)).ai !== null);
+    const device = await ctx.device();
+    expect(await device.next((m) => m.type === 'verdict')).toMatchObject({
+      uploadId: 'gone-1',
+      label: 'object',
+    });
+  });
+
   it('retries temporary failures, then gives up with an error verdict', async () => {
     const classifier = fake(() => {
       throw new ClassifierError('OpenAI HTTP 503: overloaded', true);
