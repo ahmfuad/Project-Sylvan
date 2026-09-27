@@ -45,6 +45,7 @@ export const routes = [
       { path: 'live', lazy: page(() => import('./pages/LivePage')) },
       { path: 'explore', lazy: page(() => import('./pages/explore/ExplorePage')) },
       { path: 'data', lazy: page(() => import('./pages/DataPage')) },
+      { path: 'debug', lazy: page(() => import('./pages/DebugPage')) },
       { path: 'samples/:id', lazy: page(() => import('./pages/SampleDetailPage')) },
       { path: '*', lazy: page(() => import('./pages/NotFoundPage')) },
     ],

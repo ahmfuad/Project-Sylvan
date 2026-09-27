@@ -18,6 +18,15 @@ export async function handleNewSample(queryClient: QueryClient, sample: Sample) 
   ]);
 }
 
+/** A sample changed after upload (its photo verdict arrived): refresh everything showing it. */
+export async function handleUpdatedSample(queryClient: QueryClient, sample: Sample) {
+  queryClient.setQueryData(queryKeys.sample(sample.id), sample);
+  queryClient.setQueryData(queryKeys.latest(), (latest: Sample | null | undefined) =>
+    latest?.id === sample.id ? sample : latest,
+  );
+  await queryClient.invalidateQueries({ queryKey: queryKeys.samples() });
+}
+
 /**
  * Keeps the app up to date from both sources and announces each new sample exactly once:
  * the socket pushes `sample.created` and `device.status`, while the polled "latest sample"
@@ -48,6 +57,8 @@ export function useLiveUpdates(onNewSample: (sample: Sample) => void) {
       if (message.type === 'sample.created') {
         void handleNewSample(queryClient, message.sample);
         announce(message.sample);
+      } else if (message.type === 'sample.updated') {
+        void handleUpdatedSample(queryClient, message.sample);
       } else if (message.type === 'hello' || message.type === 'device.status') {
         setPushedDeviceStatus(message.device);
       }

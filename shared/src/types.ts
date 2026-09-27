@@ -13,6 +13,25 @@ export interface Sample {
   /** Path such as `/photos/2026/09/<uuid>.jpg`, or null when no photo was stored. */
   photoUrl: string | null;
   photoBytes: number | null;
+  /** What the ESP32 reported as the cause when `ok` is false, e.g. `dht=4,lux=ok`. */
+  failReason: string | null;
+  /** OpenAI verdict for the photo, set shortly after upload; null until it arrives. */
+  classification: Classification | null;
+  /** Model answer, HTTP status or error text behind the verdict, for debugging. */
+  classificationNote: string | null;
+  classifiedAt: string | null;
+}
+
+/**
+ * Photo verdict from the ESP32's OpenAI call: `tree` (plant or tree in a tub), `object` (anything
+ * else), `unclear` (the model could not tell) or `error` (no answer: no photo, network, API error).
+ */
+export type Classification = 'tree' | 'object' | 'unclear' | 'error';
+
+/** Body of `POST /api/samples/classification` (identified by the `X-Upload-Id` header). */
+export interface ClassificationRequest {
+  label: Classification;
+  note?: string;
 }
 
 export interface SampleListResponse {
@@ -179,6 +198,42 @@ export interface DeviceEventsResponse {
   items: DeviceEvent[];
 }
 
+/* ------------------------------------------------------------------------------------------------
+ * Debug logs: trail lines from the ESP32 and (relayed by it) the ATmega32
+ * ---------------------------------------------------------------------------------------------- */
+
+export type DeviceLogSource = 'esp32' | 'atmega';
+export type DeviceLogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+export interface DeviceLog {
+  id: number;
+  /** When the server received the line. */
+  receivedAt: string;
+  source: DeviceLogSource;
+  level: DeviceLogLevel;
+  /** ESP32 boot id the line belongs to, so one power cycle can be followed on its own. */
+  bootId: string | null;
+  /** ESP32 millis() when the line was logged (or relayed, for ATmega lines). */
+  deviceMs: number | null;
+  message: string;
+}
+
+export interface DeviceLogsResponse {
+  /** Newest first. */
+  items: DeviceLog[];
+  /** Pass as `before` to fetch older lines; null when there are none. */
+  nextBefore: number | null;
+}
+
+export interface DeviceLogsParams {
+  limit?: number;
+  before?: number;
+  source?: DeviceLogSource;
+  /** Minimum level: `warn` returns warn and error lines. */
+  level?: DeviceLogLevel;
+  bootId?: string;
+}
+
 /**
  * WebSocket close codes used by `/ws/device` and `/ws/live` (values live in each workspace because
  * this package is types only): 1001 server shutdown, 4002 replaced by a newer device connection,
@@ -202,7 +257,14 @@ export interface DeviceHeartbeatMessage {
   streaming?: boolean;
 }
 
-export type DeviceMessage = DeviceHelloMessage | DeviceHeartbeatMessage;
+/** A batch of debug lines. `src` is `e` (ESP32) or `a` (ATmega); `lvl` is d, i, w or e. */
+export interface DeviceLogMessage {
+  type: 'log';
+  bootId?: string;
+  entries: { src: 'e' | 'a'; lvl: 'd' | 'i' | 'w' | 'e'; ms?: number; msg: string }[];
+}
+
+export type DeviceMessage = DeviceHelloMessage | DeviceHeartbeatMessage | DeviceLogMessage;
 
 // Server → device
 export interface ServerViewersMessage {
@@ -226,6 +288,8 @@ export type ServerToViewerMessage =
   | { type: 'hello'; serverTime: string; device: DeviceStatus }
   | { type: 'device.status'; device: DeviceStatus }
   | { type: 'sample.created'; sample: Sample }
+  | { type: 'sample.updated'; sample: Sample }
+  | { type: 'log.appended'; entries: DeviceLog[] }
   | { type: 'stream.state'; state: StreamState; reason: StreamStopReason | null };
 
 // Viewer → server

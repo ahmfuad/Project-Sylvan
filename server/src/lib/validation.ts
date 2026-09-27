@@ -7,13 +7,17 @@ export interface Readings {
   lux: number;
 }
 
-export type UploadQuery = { ok: true; readings: Readings } | { ok: false; readings: null };
+export type UploadQuery =
+  | { ok: true; readings: Readings; failReason: null }
+  | { ok: false; readings: null; failReason: string | null };
 
 type Query = Record<string, unknown>;
 
 const DECIMAL = /^-?\d{1,3}(\.\d+)?$/;
 const UNSIGNED_INTEGER = /^\d{1,5}$/;
 const UPLOAD_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** Short machine-written cause, e.g. `dht=4,lux=ok`. */
+const FAIL_REASON = /^[A-Za-z0-9_=,:.-]{1,64}$/;
 
 function invalid(code: string, message: string): never {
   throw new AppError(400, code, message);
@@ -49,7 +53,14 @@ export function parseUploadQuery(query: Query): UploadQuery {
     if (present.length > 0) {
       invalid('READINGS_NOT_ALLOWED', `ok=0 must not include readings (got ${present.join(', ')})`);
     }
-    return { ok: false, readings: null };
+    const reason = query.reason;
+    if (reason !== undefined && (typeof reason !== 'string' || !FAIL_REASON.test(reason))) {
+      invalid('INVALID_REASON', 'reason must be 1-64 characters of A-Z, a-z, 0-9, _ = , : . or -');
+    }
+    return { ok: false, readings: null, failReason: reason ?? null };
+  }
+  if (query.reason !== undefined) {
+    invalid('REASON_NOT_ALLOWED', 'reason is only allowed with ok=0');
   }
 
   const temperature = readDecimal(query, 't', 'INVALID_TEMPERATURE', 'temperature', -40, 80);
@@ -63,7 +74,7 @@ export function parseUploadQuery(query: Query): UploadQuery {
   const lux = Number(rawLux);
   if (lux > 65535) invalid('INVALID_LUX', 'l (lux) must be a whole number between 0 and 65535');
 
-  return { ok: true, readings: { temperature, humidity, lux } };
+  return { ok: true, readings: { temperature, humidity, lux }, failReason: null };
 }
 
 /** Returns the `X-Upload-Id` header value, or null when the header is absent. */
@@ -243,4 +254,27 @@ export function parseExploreQuery(query: Query): ExploreQuery {
 /** Parses a sample id path parameter; returns null when it cannot be a valid id. */
 export function parseSampleId(raw: string): string | null {
   return ID.test(raw) && Number(raw) <= Number.MAX_SAFE_INTEGER ? raw : null;
+}
+
+const CLASSIFICATIONS = ['tree', 'object', 'unclear', 'error'] as const;
+const MAX_NOTE_LENGTH = 300;
+
+/** Validates the JSON body of `POST /api/samples/classification`. */
+export function parseClassificationBody(body: unknown): {
+  label: (typeof CLASSIFICATIONS)[number];
+  note: string | null;
+} {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    invalid('INVALID_BODY', 'Body must be a JSON object with a label');
+  }
+  const { label, note } = body as { label?: unknown; note?: unknown };
+  if (typeof label !== 'string' || !(CLASSIFICATIONS as readonly string[]).includes(label)) {
+    invalid('INVALID_LABEL', `label must be one of ${CLASSIFICATIONS.join(', ')}`);
+  }
+  if (note !== undefined && note !== null && typeof note !== 'string') {
+    invalid('INVALID_NOTE', 'note must be a string');
+  }
+  // Truncated rather than rejected: a long model answer is still worth keeping for debugging.
+  const trimmed = typeof note === 'string' ? note.trim().slice(0, MAX_NOTE_LENGTH) : '';
+  return { label: label as (typeof CLASSIFICATIONS)[number], note: trimmed || null };
 }

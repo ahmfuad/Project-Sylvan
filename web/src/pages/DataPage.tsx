@@ -7,6 +7,7 @@ import { CompactReadings } from '../components/ui/Readings';
 import { RelativeTime } from '../components/ui/RelativeTime';
 import { SamplePhoto } from '../components/ui/SamplePhoto';
 import { LoadingRegion, Skeleton } from '../components/ui/Skeleton';
+import { ClassificationBadge } from '../components/ui/ClassificationBadge';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { StatusFilter } from '../components/ui/StatusFilter';
 import { EmptyState, ErrorState } from '../components/ui/States';
@@ -247,7 +248,10 @@ export default function DataPage() {
                 <div className="min-w-0 flex-1 space-y-1">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-semibold tabular">#{sample.id}</span>
-                    <StatusBadge ok={sample.ok} />
+                    <span className="flex flex-wrap justify-end gap-1">
+                      <ClassificationBadge sample={sample} />
+                      <StatusBadge ok={sample.ok} />
+                    </span>
                   </div>
                   <p className="text-xs text-ink-muted tabular">
                     {formatDateTime(sample.createdAt)}
@@ -308,7 +312,10 @@ export default function DataPage() {
                     <RelativeTime value={sample.createdAt} className="text-xs text-ink-muted" />
                   </td>
                   <td className="px-2 py-1">
-                    <StatusBadge ok={sample.ok} />
+                    <span className="flex flex-wrap gap-1">
+                      <StatusBadge ok={sample.ok} />
+                      <ClassificationBadge sample={sample} />
+                    </span>
                   </td>
                   {(['temperature', 'humidity', 'lux'] as const).map((key) => (
                     <td key={key} className="px-2 py-1 text-right whitespace-nowrap">

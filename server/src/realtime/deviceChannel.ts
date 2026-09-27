@@ -2,12 +2,15 @@ import type { ServerToDeviceMessage } from '@sylvan/shared';
 import type { FastifyBaseLogger } from 'fastify';
 import type { RawData, WebSocket } from 'ws';
 import type { DeviceEventStore } from '../services/deviceEvents.js';
+import type { DeviceLogStore } from '../services/deviceLogs.js';
 import type { DeviceStatusTracker } from './deviceStatus.js';
 import {
   CLOSE,
   MAX_BAD_MESSAGES,
+  MAX_DEVICE_TEXT_MESSAGE_BYTES,
   deviceHeartbeatSchema,
   deviceHelloSchema,
+  deviceLogSchema,
   isJpegFrame,
   parseTextMessage,
 } from './protocol.js';
@@ -22,6 +25,8 @@ interface DeviceConnection {
 export interface DeviceChannelOptions {
   status: DeviceStatusTracker;
   events: DeviceEventStore;
+  /** Debug trail storage; absent in tests that do not exercise logging. */
+  logs?: DeviceLogStore;
   log: FastifyBaseLogger;
   maxFrameBytes: number;
   targetFps: number;
@@ -30,6 +35,8 @@ export interface DeviceChannelOptions {
   onDisconnected: () => void;
   onFrame: (frame: Buffer) => void;
 }
+
+const LOG_LEVELS = { d: 'debug', i: 'info', w: 'warn', e: 'error' } as const;
 
 const toBuffer = (data: RawData): Buffer =>
   Buffer.isBuffer(data) ? data : Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
@@ -130,7 +137,7 @@ export class DeviceChannel {
       return;
     }
 
-    const parsed = parseTextMessage(data);
+    const parsed = parseTextMessage(data, MAX_DEVICE_TEXT_MESSAGE_BYTES);
     if (parsed.kind === 'invalid') {
       this.violation(connection, 'malformed JSON');
       return;
@@ -159,6 +166,23 @@ export class DeviceChannel {
           return;
         }
         status.heartbeat(heartbeat.data);
+        return;
+      }
+      case 'log': {
+        const batch = deviceLogSchema.safeParse(parsed.value);
+        if (!batch.success) {
+          this.violation(connection, 'invalid log batch');
+          return;
+        }
+        this.options.logs?.append(
+          batch.data.bootId ?? status.currentBootId,
+          batch.data.entries.map((entry) => ({
+            source: entry.src === 'a' ? 'atmega' : 'esp32',
+            level: LOG_LEVELS[entry.lvl],
+            deviceMs: entry.ms ?? null,
+            message: entry.msg,
+          })),
+        );
         return;
       }
       default:

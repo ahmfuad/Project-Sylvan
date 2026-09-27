@@ -7,6 +7,7 @@ import { CompactReadings } from '../components/ui/Readings';
 import { RelativeTime } from '../components/ui/RelativeTime';
 import { SamplePhoto } from '../components/ui/SamplePhoto';
 import { LoadingRegion, Skeleton } from '../components/ui/Skeleton';
+import { ClassificationBadge } from '../components/ui/ClassificationBadge';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { StatusFilter } from '../components/ui/StatusFilter';
 import { EmptyState, ErrorState } from '../components/ui/States';
@@ -40,7 +41,10 @@ function GalleryCard({
       <div className="space-y-1.5 p-3">
         <div className="flex items-center justify-between gap-2">
           <span className="font-semibold tabular">#{sample.id}</span>
-          <StatusBadge ok={sample.ok} />
+          <span className="flex flex-wrap justify-end gap-1">
+            <ClassificationBadge sample={sample} />
+            <StatusBadge ok={sample.ok} />
+          </span>
         </div>
         <CompactReadings sample={sample} />
         <p className="text-xs text-ink-muted">

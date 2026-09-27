@@ -1,4 +1,5 @@
 import type {
+  Classification,
   NeighborsResponse,
   Sample,
   SampleListResponse,
@@ -19,12 +20,18 @@ export interface SampleRow {
   lux: number | null;
   photo_key: string | null;
   photo_bytes: number | null;
+  fail_reason: string | null;
+  classification: Classification | null;
+  classification_note: string | null;
+  classified_at: Date | null;
 }
 
 export interface CreateSampleInput {
   readings: Readings | null;
   uploadId: string | null;
   photo: Buffer | null;
+  /** Only for failed samples: the cause reported by the rover. */
+  failReason?: string | null;
 }
 
 export interface CreateSampleResult {
@@ -39,6 +46,8 @@ export interface SamplesService {
   list(query: ListQuery): Promise<SampleListResponse>;
   get(id: string): Promise<Sample | null>;
   neighbors(id: string): Promise<NeighborsResponse | null>;
+  /** Sets the photo verdict for an upload; returns the updated sample, or null if unknown. */
+  classify(uploadId: string, label: Classification, note: string | null): Promise<Sample | null>;
 }
 
 const toNumber = (value: string | null) => (value === null ? null : Number(value));
@@ -53,6 +62,10 @@ export function toSample(row: SampleRow): Sample {
     lux: row.lux,
     photoUrl: row.photo_key === null ? null : `/photos/${row.photo_key}`,
     photoBytes: row.photo_bytes,
+    failReason: row.fail_reason,
+    classification: row.classification,
+    classificationNote: row.classification_note,
+    classifiedAt: row.classified_at === null ? null : row.classified_at.toISOString(),
   };
 }
 
@@ -70,6 +83,7 @@ export function sampleFilters(
 
 export const sampleColumns = (sql: Sql) => sql`
   id, created_at, ok, temperature, humidity, lux, photo_key, photo_bytes,
+  fail_reason, classification, classification_note, classified_at,
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
 `;
 
@@ -101,17 +115,19 @@ export function createSamplesService(deps: {
   return {
     findUpload,
 
-    async create({ readings, uploadId, photo }) {
+    async create({ readings, uploadId, photo, failReason = null }) {
       const stored = photo ? await storage.save(photo) : null;
 
       let inserted: { id: string }[];
       try {
         inserted = await sql<{ id: string }[]>`
-          INSERT INTO samples (upload_id, ok, temperature, humidity, lux, photo_key, photo_bytes)
+          INSERT INTO samples
+            (upload_id, ok, temperature, humidity, lux, photo_key, photo_bytes, fail_reason)
           VALUES (
             ${uploadId}, ${readings !== null},
             ${readings?.temperature ?? null}, ${readings?.humidity ?? null}, ${readings?.lux ?? null},
-            ${stored?.key ?? null}, ${stored?.bytes ?? null}
+            ${stored?.key ?? null}, ${stored?.bytes ?? null},
+            ${readings === null ? failReason : null}
           )
           ON CONFLICT (upload_id) DO NOTHING
           RETURNING id
@@ -185,6 +201,16 @@ export function createSamplesService(deps: {
         previousId: row.previous_id === null ? null : Number(row.previous_id),
         nextId: row.next_id === null ? null : Number(row.next_id),
       };
+    },
+
+    async classify(uploadId, label, note) {
+      const [row] = await sql<SampleRow[]>`
+        UPDATE samples
+        SET classification = ${label}, classification_note = ${note}, classified_at = now()
+        WHERE upload_id = ${uploadId}
+        RETURNING ${selectColumns()}
+      `;
+      return row ? toSample(row) : null;
     },
   };
 }

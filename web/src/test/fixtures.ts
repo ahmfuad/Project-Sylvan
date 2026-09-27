@@ -9,6 +9,10 @@ export function makeSample(overrides: Partial<Sample> & { id: number }): Sample 
     lux: 820,
     photoUrl: `/photos/2026/09/${String(overrides.id).padStart(8, '0')}-0000-4000-8000-000000000000.jpg`,
     photoBytes: 18_000,
+    failReason: null,
+    classification: null,
+    classificationNote: null,
+    classifiedAt: null,
     ...overrides,
   };
 }

@@ -10,6 +10,10 @@ export const CLOSE = {
 
 export const MAX_BAD_MESSAGES = 10;
 export const MAX_TEXT_MESSAGE_BYTES = 1024;
+/** Device text frames may carry a batch of debug log lines, so they get a larger limit. */
+export const MAX_DEVICE_TEXT_MESSAGE_BYTES = 16 * 1024;
+export const MAX_LOG_ENTRIES_PER_MESSAGE = 50;
+export const MAX_LOG_MESSAGE_LENGTH = 500;
 
 const shortText = z.string().max(64);
 
@@ -28,6 +32,22 @@ export const deviceHeartbeatSchema = z.object({
   streaming: z.boolean().optional(),
 });
 
+export const deviceLogSchema = z.object({
+  type: z.literal('log'),
+  bootId: shortText.optional(),
+  entries: z
+    .array(
+      z.object({
+        src: z.enum(['e', 'a']),
+        lvl: z.enum(['d', 'i', 'w', 'e']),
+        ms: z.number().int().min(0).optional(),
+        msg: z.string().min(1).max(MAX_LOG_MESSAGE_LENGTH),
+      }),
+    )
+    .min(1)
+    .max(MAX_LOG_ENTRIES_PER_MESSAGE),
+});
+
 export const viewerWatchSchema = z.object({
   type: z.literal('watch'),
   on: z.boolean(),
@@ -37,8 +57,8 @@ export type ParsedText =
   { kind: 'message'; type: string; value: Record<string, unknown> } | { kind: 'invalid' };
 
 /** Parses a JSON text frame into an object with a string `type`, or reports it invalid. */
-export function parseTextMessage(data: Buffer): ParsedText {
-  if (data.length > MAX_TEXT_MESSAGE_BYTES) return { kind: 'invalid' };
+export function parseTextMessage(data: Buffer, maxBytes = MAX_TEXT_MESSAGE_BYTES): ParsedText {
+  if (data.length > maxBytes) return { kind: 'invalid' };
   try {
     const value: unknown = JSON.parse(data.toString('utf8'));
     if (

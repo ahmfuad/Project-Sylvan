@@ -66,7 +66,7 @@ export async function createTestContext(overrides: Partial<AppConfig> = {}): Pro
 }
 
 export async function resetDatabase(sql: Sql) {
-  await sql`TRUNCATE samples, device_events RESTART IDENTITY`;
+  await sql`TRUNCATE samples, device_events, device_logs RESTART IDENTITY`;
 }
 
 /** Lists every file (including temp files) below a directory, relative to it. */
