@@ -16,6 +16,7 @@
 #include "mbedtls/base64.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 // =====================================================
 // PROJECT SYLVAN - ESP32-CAM
@@ -107,7 +108,7 @@ const char *FW_VERSION = "sylvan-esp32cam-1.1";
 // ---- OpenAI (tree vs. random object) ----
 // Paste your key here before uploading, and don't commit it: anyone with the board can read it
 // back out of flash, so give this key a monthly spending limit in the OpenAI dashboard.
-const char *OPENAI_API_KEY = "sample_key";
+const char *OPENAI_API_KEY = "sk-somekey";   // replace with your own key before uploading
 const char *OPENAI_HOST = "api.openai.com";
 const char *OPENAI_PATH = "/v1/chat/completions";
 //gpt 5.5
@@ -976,7 +977,8 @@ ClassifyResult classifyPhoto(const uint8_t *jpg, size_t jpgLen)
         LOGW("OpenAI: skipped, Wi-Fi not connected");
         return result;
     }
-    if (strncmp(OPENAI_API_KEY, "sk-", 3) != 0 || strncmp(OPENAI_API_KEY, "sk-PASTE", 8) == 0)
+    if (strncmp(OPENAI_API_KEY, "sk-", 3) != 0 || strcmp(OPENAI_API_KEY, "sk-somekey") == 0 ||
+        strncmp(OPENAI_API_KEY, "sk-PASTE", 8) == 0)
     {
         strlcpy(result.note, "OPENAI_API_KEY not set in firmware", sizeof(result.note));
         LOGE("OpenAI: skipped, OPENAI_API_KEY is not set (must start with sk-)");

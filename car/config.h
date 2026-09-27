@@ -182,5 +182,4 @@
 #define LAP_DURATION_MS         8000UL  /* <-- measure your own lap and set this */
 #define LAPS_TO_RUN             3U
 
-
 #endif
