@@ -89,6 +89,7 @@ describe('GET /api/samples', () => {
       classification: null,
       classificationNote: null,
       classifiedAt: null,
+      ai: null,
     });
   });
 

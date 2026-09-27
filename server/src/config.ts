@@ -64,6 +64,10 @@ const envSchema = z
     LOG_LEVEL: z
       .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
       .default('info'),
+    /** Optional: enables the server's own photo classification. */
+    OPENAI_API_KEY: z.string().min(20, 'does not look like an OpenAI API key').optional(),
+    /** Must return logprobs for the confidence score (gpt-4.1 / gpt-4o families). */
+    OPENAI_MODEL: z.string().min(1).default('gpt-4.1-mini'),
   })
   .refine((env) => env.WS_MAX_MESSAGE_BYTES >= env.MAX_FRAME_BYTES, {
     path: ['WS_MAX_MESSAGE_BYTES'],
@@ -84,6 +88,7 @@ const envSchema = z
       .filter(Boolean),
     displayTimezone: env.DISPLAY_TIMEZONE,
     logLevel: env.LOG_LEVEL,
+    openai: env.OPENAI_API_KEY ? { apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL } : null,
     realtime: {
       deviceTimeoutMs: env.DEVICE_TIMEOUT_S * 1000,
       maxFrameBytes: env.MAX_FRAME_BYTES,

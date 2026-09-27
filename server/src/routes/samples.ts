@@ -21,6 +21,8 @@ interface SampleRoutesOptions {
   maxPhotoBytes: number;
   /** Off by default so existing fast-firing tests are unaffected; the real server turns it on. */
   hardening?: boolean;
+  /** Called after a new sample with a photo is stored (wakes the classification worker). */
+  onPhotoStored?: () => void;
 }
 
 interface ParsedUpload {
@@ -37,7 +39,7 @@ declare module 'fastify' {
 
 /** `POST /api/samples`, the fixed contract used by the ESP32-CAM firmware. */
 const uploadRoute: FastifyPluginAsync<SampleRoutesOptions> = async (app, options) => {
-  const { samples, events, deviceKey, maxPhotoBytes, hardening } = options;
+  const { samples, events, deviceKey, maxPhotoBytes, hardening, onPhotoStored } = options;
 
   app.decorateRequest('sampleUpload', null);
 
@@ -151,6 +153,7 @@ const uploadRoute: FastifyPluginAsync<SampleRoutesOptions> = async (app, options
         { sampleId: result.response.id, created: result.created, photoBytes: photo?.length ?? 0 },
         result.created ? 'sample stored' : 'duplicate upload id resolved after race',
       );
+      if (result.created && result.response.photo) onPhotoStored?.();
       if (result.created && events.hasSubscribers()) {
         // The insert has committed; announce it without delaying the device's response.
         void samples.get(String(result.response.id)).then(

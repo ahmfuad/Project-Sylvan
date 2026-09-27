@@ -13,6 +13,7 @@ export function makeSample(overrides: Partial<Sample> & { id: number }): Sample 
     classification: null,
     classificationNote: null,
     classifiedAt: null,
+    ai: null,
     ...overrides,
   };
 }

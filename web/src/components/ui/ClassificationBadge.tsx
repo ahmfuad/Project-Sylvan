@@ -8,27 +8,43 @@ const STYLES: Record<Classification, { label: string; className: string }> = {
   error: { label: 'Not classified', className: 'bg-failed-soft text-failed' },
 };
 
-/** The OpenAI verdict for a sample's photo; renders nothing until the verdict arrives. */
+/** Formats a 0-1 confidence as a whole percentage, e.g. 0.943 -> "94%". */
+export const formatConfidence = (confidence: number) => `${String(Math.round(confidence * 100))}%`;
+
+/**
+ * The photo verdict: the server's (with its confidence) when it has one, otherwise the rover's
+ * own. `source="rover"` always shows the rover's. Renders nothing until a verdict exists.
+ */
 export function ClassificationBadge({
   sample,
+  source = 'best',
   className = '',
 }: {
-  sample: Pick<Sample, 'classification'>;
+  sample: Pick<Sample, 'classification' | 'ai'>;
+  source?: 'best' | 'rover';
   className?: string;
 }) {
-  if (sample.classification === null) return null;
-  const { label, className: tone } = STYLES[sample.classification];
+  const server = source === 'best' ? sample.ai : null;
+  const verdict = server?.label ?? sample.classification;
+  if (verdict === null) return null;
+  const { label, className: tone } = STYLES[verdict];
+  const confidence = server?.confidence ?? null;
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${tone} ${className}`}
     >
-      {sample.classification === 'tree' ? (
+      {verdict === 'tree' ? (
         <IconLeaf size={13} strokeWidth={2.5} />
-      ) : sample.classification === 'error' ? (
+      ) : verdict === 'error' ? (
         <IconAlert size={13} strokeWidth={2.5} />
       ) : null}
       <span className="sr-only">Photo classified as </span>
       {label}
+      {confidence !== null && verdict !== 'error' && (
+        <span className="font-normal tabular">
+          <span className="sr-only">, confidence</span> {formatConfidence(confidence)}
+        </span>
+      )}
     </span>
   );
 }

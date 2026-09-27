@@ -13,6 +13,8 @@ import { photoRoutes } from './routes/photos.js';
 import { exportRoutes } from './routes/export.js';
 import { sampleRoutes } from './routes/samples.js';
 import { statsRoutes } from './routes/stats.js';
+import { createOpenAiClassifier, type PhotoClassifier } from './services/aiClassifier.js';
+import { createClassificationWorker } from './services/aiWorker.js';
 import { createDeviceEventStore } from './services/deviceEvents.js';
 import { createDeviceLogStore } from './services/deviceLogs.js';
 import { createDiskUsageReporter } from './services/diskUsage.js';
@@ -28,7 +30,11 @@ export type AppConfig = Pick<
   Config,
   'deviceKey' | 'photoDir' | 'maxPhotoBytes' | 'servePhotos' | 'trustProxy' | 'logLevel'
 > &
-  Partial<Pick<Config, 'displayTimezone' | 'publicBaseUrl'>> & {
+  Partial<Pick<Config, 'displayTimezone' | 'publicBaseUrl' | 'openai'>> & {
+    /** Test hook: classify photos with this instead of OpenAI (enables the worker). */
+    photoClassifier?: PhotoClassifier;
+    /** Test hook: worker timing overrides. */
+    classificationWorker?: { retryDelayMs?: number; idleMs?: number; maxAttempts?: number };
     /** Enables the WebSocket channels. Off unless set, so HTTP-only tests are unaffected. */
     realtime?: RealtimeConfig;
     /**
@@ -154,6 +160,34 @@ export async function buildApp({
       app.log.error({ err: error, photoKey: key }, 'failed to remove orphan photo');
     },
   });
+
+  // Server-side photo classification: on when an OpenAI key is configured (or a test injects a
+  // classifier). The worker backfills older photos too; each new upload wakes it.
+  const classifier =
+    config.photoClassifier ??
+    (config.openai
+      ? createOpenAiClassifier({ apiKey: config.openai.apiKey, model: config.openai.model })
+      : null);
+  const worker = classifier
+    ? createClassificationWorker({
+        sql,
+        storage,
+        samples,
+        events,
+        classifier,
+        log: app.log.child({ module: 'classifier' }),
+        ...config.classificationWorker,
+      })
+    : null;
+  if (worker) {
+    app.addHook('onReady', () => {
+      worker.start();
+    });
+    app.addHook('preClose', async () => {
+      await worker.stop();
+    });
+    app.log.info({ model: classifier?.model }, 'server photo classification enabled');
+  }
 
   const timezones = createTimezoneResolver(sql, config.displayTimezone ?? 'UTC');
   const stats = createStatsService({ sql, samples, timezones });
@@ -282,6 +316,13 @@ export async function buildApp({
     deviceKey: config.deviceKey,
     maxPhotoBytes: config.maxPhotoBytes,
     hardening: Boolean(config.hardening),
+    ...(worker
+      ? {
+          onPhotoStored: () => {
+            worker.kick();
+          },
+        }
+      : {}),
   });
   await app.register(statsRoutes, { stats });
   await app.register(exploreRoutes, { explore });

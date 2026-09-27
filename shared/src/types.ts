@@ -20,6 +20,24 @@ export interface Sample {
   /** Model answer, HTTP status or error text behind the verdict, for debugging. */
   classificationNote: string | null;
   classifiedAt: string | null;
+  /**
+   * The server's own OpenAI verdict for the photo, with a confidence score. Null until the
+   * server has classified it (or when the sample has no photo, or classification is disabled).
+   */
+  ai: AiClassification | null;
+}
+
+export interface AiClassification {
+  label: Classification;
+  /**
+   * Probability (0-1) the model gave its answer, from the answer token's log-probabilities;
+   * null when the model did not report them (or for `error`).
+   */
+  confidence: number | null;
+  model: string | null;
+  /** Model answer or error text, for debugging. */
+  note: string | null;
+  classifiedAt: string;
 }
 
 /**

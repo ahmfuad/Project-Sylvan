@@ -7,7 +7,11 @@ import { ReadingList } from '../components/ui/Readings';
 import { RelativeTime } from '../components/ui/RelativeTime';
 import { SamplePhoto } from '../components/ui/SamplePhoto';
 import { LoadingRegion, Skeleton } from '../components/ui/Skeleton';
-import { ClassificationBadge, describeFailReason } from '../components/ui/ClassificationBadge';
+import {
+  ClassificationBadge,
+  describeFailReason,
+  formatConfidence,
+} from '../components/ui/ClassificationBadge';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { ErrorState } from '../components/ui/States';
 import { isNotFound } from '../lib/api';
@@ -192,31 +196,54 @@ export default function SampleDetailPage() {
             <h2 id="classification-heading" className="text-base font-semibold">
               Photo classification
             </h2>
-            {data.classification === null ? (
-              <p className="mt-2 text-sm text-ink-muted">
-                Waiting for the rover's verdict. It appears here on its own when it arrives.
-              </p>
-            ) : (
-              <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+            {data.ai ? (
+              <dl className="mt-3 grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 text-sm">
                 <dt className="text-ink-muted">Verdict</dt>
                 <dd>
                   <ClassificationBadge sample={data} />
                 </dd>
-                {data.classificationNote && (
+                {data.ai.confidence !== null && data.ai.label !== 'error' && (
                   <>
-                    <dt className="text-ink-muted">Details</dt>
-                    <dd className="break-words">{data.classificationNote}</dd>
-                  </>
-                )}
-                {data.classifiedAt && (
-                  <>
-                    <dt className="text-ink-muted">Classified</dt>
-                    <dd className="tabular">
-                      <RelativeTime value={data.classifiedAt} />
+                    <dt className="text-ink-muted">Confidence</dt>
+                    <dd className="flex items-center gap-2">
+                      <span
+                        className="h-2 w-32 overflow-hidden rounded-full bg-surface-muted"
+                        aria-hidden="true"
+                      >
+                        <span
+                          className="block h-full rounded-full bg-brand"
+                          style={{ width: formatConfidence(data.ai.confidence) }}
+                        />
+                      </span>
+                      <span className="tabular">{formatConfidence(data.ai.confidence)}</span>
                     </dd>
                   </>
                 )}
+                {data.ai.note && (
+                  <>
+                    <dt className="text-ink-muted">Details</dt>
+                    <dd className="break-words">{data.ai.note}</dd>
+                  </>
+                )}
+                <dt className="text-ink-muted">Checked</dt>
+                <dd className="tabular">
+                  {data.ai.model ? `${data.ai.model}, ` : ''}
+                  <RelativeTime value={data.ai.classifiedAt} />
+                </dd>
               </dl>
+            ) : (
+              <p className="mt-2 text-sm text-ink-muted">
+                {data.photoUrl
+                  ? 'The server is checking this photo. The verdict appears here on its own.'
+                  : 'No photo, so nothing to classify.'}
+              </p>
+            )}
+            {data.classification !== null && (
+              <p className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3 text-sm text-ink-muted">
+                Rover's own verdict:
+                <ClassificationBadge sample={data} source="rover" />
+                {data.classificationNote && <span>({data.classificationNote})</span>}
+              </p>
             )}
             {!data.ok && (
               <div className="mt-4 border-t border-border pt-3 text-sm">

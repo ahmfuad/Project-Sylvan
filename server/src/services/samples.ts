@@ -24,6 +24,11 @@ export interface SampleRow {
   classification: Classification | null;
   classification_note: string | null;
   classified_at: Date | null;
+  ai_label: Classification | null;
+  ai_confidence: number | null;
+  ai_model: string | null;
+  ai_note: string | null;
+  ai_classified_at: Date | null;
 }
 
 export interface CreateSampleInput {
@@ -66,6 +71,16 @@ export function toSample(row: SampleRow): Sample {
     classification: row.classification,
     classificationNote: row.classification_note,
     classifiedAt: row.classified_at === null ? null : row.classified_at.toISOString(),
+    ai:
+      row.ai_label === null || row.ai_classified_at === null
+        ? null
+        : {
+            label: row.ai_label,
+            confidence: row.ai_confidence,
+            model: row.ai_model,
+            note: row.ai_note,
+            classifiedAt: row.ai_classified_at.toISOString(),
+          },
   };
 }
 
@@ -84,6 +99,7 @@ export function sampleFilters(
 export const sampleColumns = (sql: Sql) => sql`
   id, created_at, ok, temperature, humidity, lux, photo_key, photo_bytes,
   fail_reason, classification, classification_note, classified_at,
+  ai_label, ai_confidence, ai_model, ai_note, ai_classified_at,
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
 `;
 
