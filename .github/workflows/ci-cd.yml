@@ -72,46 +72,9 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
-    name: Deploy to sylvan.daftar-e.com
     needs: [check, docker]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment:
-      name: production
-      url: https://sylvan.daftar-e.com
-    concurrency:
-      group: deploy-production
-      cancel-in-progress: false
-    steps:
-      - name: Configure SSH
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        run: |
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
-
-      # The key is bound to /usr/local/bin/sylvan-deploy on the server (see deploy/ci-deploy.sh);
-      # the only thing sent is the commit to deploy.
-      - name: Deploy ${{ github.sha }}
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-        run: |
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -o ServerAliveInterval=30 "root@${DEPLOY_HOST}" "${GITHUB_SHA}"
-
-      - name: Smoke test
-        run: |
-          for _ in $(seq 1 10); do
-            if curl -sfS https://sylvan.daftar-e.com/api/health; then
-              echo
-              curl -sfS -o /dev/null https://sylvan.daftar-e.com/
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "https://sylvan.daftar-e.com/api/health is not responding" >&2
-          exit 1
+    uses: ./.github/workflows/deploy.yml
+    with:
+      sha: ${{ github.sha }}
+    secrets: inherit

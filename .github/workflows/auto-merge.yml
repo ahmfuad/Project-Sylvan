@@ -1,0 +1,40 @@
+name: Auto-merge
+
+# PRs from trusted contributors merge by themselves once the required CI checks on main pass
+# (branch protection), then deploy. pull_request_target gives this workflow a write token even
+# for PRs from forks, so it must NEVER check out or run the PR's code: it only calls the API.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable:
+    name: Enable auto-merge
+    if: >-
+      github.event.action != 'closed' &&
+      !github.event.pull_request.draft &&
+      contains(fromJSON('["rayhannn2003"]'), github.event.pull_request.user.login)
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh pr merge "$PR" --auto --squash --repo "$REPO"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+
+  # A merge made by auto-merge with the built-in token does not start ci-cd.yml's push run,
+  # so deploy it from here. (A merge you click yourself deploys through ci-cd.yml as usual.)
+  deploy:
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.merged_by.login == 'github-actions[bot]'
+    uses: ./.github/workflows/deploy.yml
+    with:
+      sha: ${{ github.event.pull_request.merge_commit_sha }}
+    secrets: inherit
