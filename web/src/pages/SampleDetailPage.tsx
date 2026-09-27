@@ -227,7 +227,8 @@ export default function SampleDetailPage() {
                 )}
                 <dt className="text-ink-muted">Checked</dt>
                 <dd className="tabular">
-                  {data.ai.model ? `${data.ai.model}, ` : ''}
+                  {/* The underlying model stays in the API data for debugging. */}
+                  {'SylvanAI, '}
                   <RelativeTime value={data.ai.classifiedAt} />
                 </dd>
               </dl>
