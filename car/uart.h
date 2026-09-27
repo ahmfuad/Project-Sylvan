@@ -9,6 +9,9 @@
  *   <S,T=30,H=66,L=235>        sample readings
  *   <F,dht=4,lux=ok>           failed sample and why (dht: ok|1..5|skip, lux: ok|fail|skip)
  *   <D,i,text>                 debug trail line; level i(nfo) w(arn) e(rror) d(ebug)
+ * Replies from the ESP32:
+ *   <C,T,99>                   verdict (T tree, O object, U unclear, E error) and confidence %
+ *   <C,T>                      the same without a confidence (older ESP32 firmware)
  */
 void uart_init(void);
 /* Blocks while the transmit buffer is full. Call with interrupts enabled. */
@@ -17,10 +20,12 @@ void uart_puts(const char *s);
 void uart_send_sample(int16_t temp_c, uint8_t humidity, uint16_t lux);
 /* dht_code: 0 ok, 1..5 DHT11 error, 0xFF not read; lux_code: 0 ok, 1 read failed, 0xFF not read. */
 void uart_send_sample_failed(uint8_t dht_code, uint8_t lux_code);
-/* Feeds one received byte to the "<C,x>" parser (called from the RX interrupt). */
+/* Feeds one received byte to the "<C,x[,nn]>" parser (called from the RX interrupt). */
 void uart_rx_byte(char c);
-/* Returns 'T', 'O', 'U' or 'E' once per received reply, else 0; clears it. */
-uint8_t uart_take_classification(void);
+/* Returns 'T', 'O', 'U' or 'E' once per received reply, else 0; clears it. `confidence` gets
+ * 0-100, or UART_NO_CONFIDENCE when the reply carried none. */
+#define UART_NO_CONFIDENCE 0xFFU
+uint8_t uart_take_classification(uint8_t *confidence);
 
 /*
  * Debug trail. Build a line, then send it; a line that does not fit in the transmit buffer is

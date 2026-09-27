@@ -10,7 +10,7 @@
 static sample_phase_t cycle_phase;
 static uint8_t armed, near_object, clearing, dht_done, light_done, succeeded;
 static uint8_t dht_attempts, dht_code, lux_code;
-static uint8_t classification;
+static uint8_t classification, confidence = UART_NO_CONFIDENCE;
 static uint32_t phase_started, clear_started;
 static int16_t sample_temp_c;
 static uint8_t sample_humidity;
@@ -60,7 +60,7 @@ uint8_t sample_cycle_observe(uint16_t distance_cm, uint32_t now)
     return 1;
 }
 
-static void log_verdict(uint8_t verdict)
+static void log_verdict(uint8_t verdict, uint8_t percent)
 {
     dbg_t d;
     dbg_start(&d, verdict == 'E' || verdict == 0 ? 'w' : 'i');
@@ -74,16 +74,23 @@ static void log_verdict(uint8_t verdict)
                   : verdict == 'O' ? PSTR("OBJECT")
                   : verdict == 'U' ? PSTR("UNCLEAR")
                                    : PSTR("ERROR"));
+        if (percent != UART_NO_CONFIDENCE) {
+            dbg_p(&d, PSTR(" ("));
+            dbg_u(&d, percent);
+            dbg_p(&d, PSTR("%)"));
+        }
     }
     dbg_send(&d);
 }
 
 void sample_cycle_update(uint32_t now)
 {
-    uint8_t reply = uart_take_classification();
+    uint8_t reply_confidence;
+    uint8_t reply = uart_take_classification(&reply_confidence);
     if (reply && (cycle_phase == SAMPLE_READINGS || cycle_phase == SAMPLE_CLASSIFYING)) {
         classification = reply;
-        log_verdict(reply);
+        confidence = reply_confidence;
+        log_verdict(reply, reply_confidence);
     } else if (reply) {
         dbg_msg('w', PSTR("late verdict ignored (not waiting for one)"));
     }
@@ -96,8 +103,9 @@ void sample_cycle_update(uint32_t now)
             dbg_msg('w', PSTR("acquire timeout, sending what we have"));
         }
         /* Drop any late reply from a previous stop before asking about this one. */
-        (void)uart_take_classification();
+        (void)uart_take_classification(0);
         classification = 0;
+        confidence = UART_NO_CONFIDENCE;
         /* Motors are held; this transition runs exactly once per sampling stop. */
         if (succeeded) {
             uart_send_sample(sample_temp_c, sample_humidity, sample_lux);
@@ -115,7 +123,7 @@ void sample_cycle_update(uint32_t now)
     } else if (cycle_phase == SAMPLE_CLASSIFYING &&
                (classification ||
                 (uint32_t)(now - phase_started) >= CLASSIFY_TIMEOUT_MS)) {
-        if (!classification) log_verdict(0);
+        if (!classification) log_verdict(0, UART_NO_CONFIDENCE);
         cycle_phase = SAMPLE_RESULT;
         phase_started = now;
     } else if (cycle_phase == SAMPLE_RESULT &&
@@ -162,3 +170,4 @@ void sample_cycle_light_done(uint8_t success, uint16_t lux)
 }
 uint8_t sample_cycle_succeeded(void) { return succeeded; }
 uint8_t sample_cycle_classification(void) { return classification; }
+uint8_t sample_cycle_confidence(void) { return confidence; }

@@ -73,10 +73,12 @@ static void uart_puts_p(const char *s)
     while ((c = (char)pgm_read_byte(s++))) uart_putc(c);
 }
 
-/* Receiver for the ESP32's "<C,x>\n" reply; x is T (tree), O (object), U (unclear), E (error). */
-static volatile uint8_t classification;
-static uint8_t rx_pos;
+/* Receiver for the ESP32's "<C,x>\n" or "<C,x,nn>\n" reply; x is T (tree), O (object),
+ * U (unclear), E (error) and nn the confidence in percent. */
+static volatile uint8_t classification, classification_confidence;
+static uint8_t rx_pos, rx_digits;
 static char rx_code;
+static uint16_t rx_confidence;
 
 void uart_rx_byte(char c)
 {
@@ -89,8 +91,30 @@ void uart_rx_byte(char c)
         rx_pos = (c == 'T' || c == 'O' || c == 'U' || c == 'E') ? 4 : 0;
         break;
     case 4:
-        if (c == '>') classification = (uint8_t)rx_code;
-        rx_pos = 0;
+        if (c == '>') {
+            classification = (uint8_t)rx_code;
+            classification_confidence = UART_NO_CONFIDENCE;
+            rx_pos = 0;
+        } else if (c == ',') {
+            rx_confidence = 0;
+            rx_digits = 0;
+            rx_pos = 5;
+        } else {
+            rx_pos = 0;
+        }
+        break;
+    case 5:
+        if (c >= '0' && c <= '9' && rx_digits < 3) {
+            rx_confidence = (uint16_t)(rx_confidence * 10U + (uint16_t)(c - '0'));
+            rx_digits++;
+        } else {
+            if (c == '>' && rx_digits > 0) {
+                classification = (uint8_t)rx_code;
+                classification_confidence =
+                    rx_confidence > 100U ? UART_NO_CONFIDENCE : (uint8_t)rx_confidence;
+            }
+            rx_pos = 0;
+        }
         break;
     default: break;
     }
@@ -101,11 +125,12 @@ ISR(USART_RXC_vect)
     uart_rx_byte((char)UDR);
 }
 
-uint8_t uart_take_classification(void)
+uint8_t uart_take_classification(uint8_t *confidence)
 {
     uint8_t saved = SREG;
     cli();
     uint8_t value = classification;
+    if (confidence) *confidence = classification_confidence;
     classification = 0;
     SREG = saved;
     return value;

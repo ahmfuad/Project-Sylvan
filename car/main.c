@@ -243,17 +243,21 @@ static void update_display(uint32_t now)
             oled_set_line(2, "Please wait");
             oled_set_line(3, "Car is stopped");
         } else if (phase == SAMPLE_RESULT) {
-            /* 21 columns: "Random Object detected" needs two lines. */
+            /* 21 columns per row. Row 1 shows SylvanAI's confidence when it was sent. */
             uint8_t verdict = sample_cycle_classification();
-            if (verdict == 'T') {
-                oled_set_line(0, "Tree detected");
-                oled_set_line(1, "");
-            } else if (verdict == 'O') {
-                oled_set_line(0, "Random Object");
-                oled_set_line(1, "detected");
-            } else if (verdict == 'U') {
-                oled_set_line(0, "Unclear photo");
-                oled_set_line(1, "");
+            uint8_t percent = sample_cycle_confidence();
+            if (verdict == 'T' || verdict == 'O' || verdict == 'U') {
+                oled_set_line(0, verdict == 'T'   ? "Tree detected"
+                                 : verdict == 'O' ? "Random Object"
+                                                  : "Unclear photo");
+                if (percent != UART_NO_CONFIDENCE) {
+                    char text[OLED_COLUMNS + 1] = "Confidence ";
+                    utoa(percent, text + strlen(text), 10);
+                    strcat(text, "%");
+                    oled_set_line(1, text);
+                } else {
+                    oled_set_line(1, verdict == 'O' ? "detected" : "");
+                }
             } else {
                 oled_set_line(0, "No result");
                 oled_set_line(1, "Check WiFi/API");

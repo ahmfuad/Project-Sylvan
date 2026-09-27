@@ -39,11 +39,11 @@
 //   <F,dht=4,lux=ok>\n      failed sample and why (older firmware sends just <F>)
 //   <D,i,text>\n            debug trail line (level d/i/w/e), forwarded to the dashboard
 //
-// Reply to the ATmega after each sample photo is classified by OpenAI:
-//   <C,T>\n                 tub tree / potted plant
-//   <C,O>\n                 random object
-//   <C,U>\n                 photo too dark/blurry to tell
-//   <C,E>\n                 no answer (no photo, no Wi-Fi, API error)
+// Reply to the ATmega after each sample photo is classified (by the server's SylvanAI):
+//   <C,T,99>\n              tub tree / potted plant, with the confidence in percent
+//   <C,O,94>\n              random object
+//   <C,U,80>\n              photo too dark/blurry to tell
+//   <C,E>\n                 no answer (no photo, no Wi-Fi, API error); no confidence
 //
 // Debugging: every step is logged to Serial AND to https://sylvan.daftar-e.com/debug
 // (ATmega lines included), and the local portal shows the recent ones at /logs.
@@ -741,10 +741,12 @@ bool startStreamServer()
 // when the response carried none; the server waits up to ~10 s for it (?wait=verdict).
 bool uploadSampleToServer(const String &uploadId, bool ok, float t, float h, float l,
                           const char *reason, const uint8_t *jpg, size_t jpgLen,
-                          char *verdictOut)
+                          char *verdictOut, float *confidenceOut)
 {
     if (verdictOut)
         *verdictOut = 0;
+    if (confidenceOut)
+        *confidenceOut = -1;
     if (WiFi.status() != WL_CONNECTED)
     {
         LOGW("upload %s skipped: Wi-Fi not connected", uploadId.c_str());
@@ -809,8 +811,13 @@ bool uploadSampleToServer(const String &uploadId, bool ok, float t, float h, flo
                             : label == "unclear" ? 'U' : 'E';
                 int at = body.indexOf("\"confidence\":");
                 if (at >= 0 && body.indexOf("\"confidence\":null") < 0)
+                {
+                    float confidence = body.substring(at + 13).toFloat();
+                    if (confidenceOut)
+                        *confidenceOut = confidence;
                     LOGI("upload %s: server verdict %s (%.0f%% confident)", uploadId.c_str(),
-                         label.c_str(), body.substring(at + 13).toFloat() * 100);
+                         label.c_str(), confidence * 100);
+                }
                 else
                     LOGI("upload %s: server verdict %s", uploadId.c_str(), label.c_str());
             }
@@ -1169,11 +1176,27 @@ ClassifyResult classifyPhoto(const uint8_t *jpg, size_t jpgLen)
     return result;
 }
 
-void sendClassificationToAtmega(char verdict)
+// `percent` is 0-100, or negative when unknown (then the confidence is left out).
+void sendClassificationToAtmega(char verdict, int percent)
 {
-    AtmegaSerial.printf("<C,%c>\n", verdict);
-    AtmegaSerial.flush();
-    LOGI("told ATmega: <C,%c>", verdict);
+    if (percent >= 0 && percent <= 100 && verdict != 'E')
+    {
+        AtmegaSerial.printf("<C,%c,%d>\n", verdict, percent);
+        AtmegaSerial.flush();
+        LOGI("told ATmega: <C,%c,%d>", verdict, percent);
+    }
+    else
+    {
+        AtmegaSerial.printf("<C,%c>\n", verdict);
+        AtmegaSerial.flush();
+        LOGI("told ATmega: <C,%c>", verdict);
+    }
+}
+
+// 0.943 -> 94; negative (unknown) stays -1.
+int confidencePercent(float confidence)
+{
+    return confidence < 0 ? -1 : (int)lroundf(confidence * 100);
 }
 
 const char *labelFor(char code)
@@ -1258,8 +1281,9 @@ void storeHistory(const SampleJob &job, uint8_t *jpg, size_t jpgLen, char verdic
 }
 
 // Waits for the server's verdict for uploadId; returns 'E' on timeout.
-char waitForServerVerdict(uint32_t sampleId, unsigned long startedAt)
+char waitForServerVerdict(uint32_t sampleId, unsigned long startedAt, float *confidenceOut)
 {
+    *confidenceOut = -1;
     unsigned long waitStart = millis();
     while (millis() - waitStart < VERDICT_WAIT_MS)
     {
@@ -1271,6 +1295,7 @@ char waitForServerVerdict(uint32_t sampleId, unsigned long startedAt)
         portEXIT_CRITICAL(&verdictMux);
         if (code != 0)
         {
+            *confidenceOut = confidence;
             if (confidence >= 0)
                 LOGI("sample #%lu: server verdict %s (%.0f%% confident) %lu ms after the packet",
                      (unsigned long)sampleId, labelFor(code), confidence * 100,
@@ -1319,9 +1344,9 @@ void processSample(const SampleJob &job)
         // Old path: classify here first (the rover is waiting), then upload.
         ClassifyResult result = classifyPhoto(jpg, jpgLen);
         verdict = result.code;
-        sendClassificationToAtmega(verdict);
+        sendClassificationToAtmega(verdict, -1);
         uploaded = uploadSampleToServer(uploadId, job.ok, job.t, job.h, job.l, job.reason, jpg,
-                                        jpgLen, nullptr);
+                                        jpgLen, nullptr, nullptr);
         if (uploaded)
             postClassification(uploadId, result);
     }
@@ -1333,17 +1358,18 @@ void processSample(const SampleJob &job)
         // Wait for the server socket to finish any handshake, then keep it quiet while we upload.
         xSemaphoreTake(tlsMutex, portMAX_DELAY);
         char fromResponse = 0;
+        float confidence = -1;
         uploaded = uploadSampleToServer(uploadId, job.ok, job.t, job.h, job.l, job.reason, jpg,
-                                        jpgLen, &fromResponse);
+                                        jpgLen, &fromResponse, &confidence);
         xSemaphoreGive(tlsMutex);
         if (uploaded && fromResponse != 0)
             verdict = fromResponse;
         else if (uploaded && jpg != nullptr)
-            verdict = waitForServerVerdict(job.id, startedAt);   // fallback: socket push
+            verdict = waitForServerVerdict(job.id, startedAt, &confidence);   // fallback: push
         else
             LOGW("sample #%lu: no verdict possible (%s)", (unsigned long)job.id,
                  uploaded ? "no photo" : "upload failed");
-        sendClassificationToAtmega(verdict);
+        sendClassificationToAtmega(verdict, confidencePercent(confidence));
     }
 
     portENTER_CRITICAL(&verdictMux);
@@ -1398,7 +1424,7 @@ void queueSample(SampleJob &job)
     if (sampleQueue == nullptr || xQueueSend(sampleQueue, &job, 0) != pdTRUE)
     {
         LOGE("sample #%lu dropped: processing queue full", (unsigned long)job.id);
-        sendClassificationToAtmega('E');
+        sendClassificationToAtmega('E', -1);
     }
 }
 
@@ -1465,7 +1491,7 @@ void processAtmegaPacket(const char *packet)
     {
         // It was probably a sample: answer now so the rover doesn't wait out its 20 s timeout.
         LOGW("it looked like a sample; replying ERROR so the rover moves on");
-        sendClassificationToAtmega('E');
+        sendClassificationToAtmega('E', -1);
     }
 }
 

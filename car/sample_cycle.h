@@ -18,4 +18,6 @@ void sample_cycle_light_done(uint8_t success, uint16_t lux);
 uint8_t sample_cycle_succeeded(void);
 /* ESP32 photo verdict: 'T' tree, 'O' object, 'U' unclear, 'E' error, 0 none/timeout. */
 uint8_t sample_cycle_classification(void);
+/* Confidence of that verdict in percent, or UART_NO_CONFIDENCE (0xFF) when unknown. */
+uint8_t sample_cycle_confidence(void);
 #endif
