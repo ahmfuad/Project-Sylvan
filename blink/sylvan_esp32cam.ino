@@ -276,23 +276,21 @@ struct ClassifyResult
     char note[160];
 };
 
-// A sample upload running in its own task while the OpenAI call runs in the sample task.
-struct UploadJob
-{
-    String uploadId;
-    bool ok;
-    float t, h, l;
-    char reason[48];
-    uint8_t *jpg;       // this job's own copy of the photo
-    size_t jpgLen;
-    volatile bool success;
-    SemaphoreHandle_t done;
-    int refs;           // freed by whichever of the two tasks lets go last
-};
+// The server classifies every uploaded photo itself (OpenAI, with a confidence score) and pushes
+// the verdict back over /ws/device. Set to true only to go back to calling OpenAI from here,
+// which needs OPENAI_API_KEY and a second TLS connection (the ESP32 often runs out of RAM for it).
+const bool DEVICE_OPENAI = false;
+// How long to wait for the server's verdict after a successful upload. The ATmega waits
+// 2 s + CLASSIFY_TIMEOUT_MS (20 s) from sending the sample, so this must stay well below that.
+const unsigned long VERDICT_WAIT_MS = 15000;
 
-// Set to false to upload after classification instead of at the same time (uses less memory:
-// only one extra TLS connection at a time).
-const bool PARALLEL_UPLOAD = true;
+// Verdict hand-off: loop() (WebSocket) writes, the sample task reads.
+portMUX_TYPE verdictMux = portMUX_INITIALIZER_UNLOCKED;
+char awaitedUploadId[40] = "";
+char pushedVerdict = 0;          // 'T', 'O', 'U', 'E'; 0 while waiting
+float pushedConfidence = -1;
+// True while a sample is being processed: live-view frames pause to free RAM for the upload.
+volatile bool sampleBusy = false;
 
 uint32_t nextSampleId = 1;
 uint32_t sampleCount = 0;     // successful samples
@@ -802,6 +800,18 @@ bool uploadSampleToServer(const String &uploadId, bool ok, float t, float h, flo
 
 // Very small, fixed-shape JSON from our own server — hand-parsing avoids pulling in a JSON
 // library for two integer fields, matching how the rest of this file builds/reads JSON.
+// Value of "key":"..." in our server's small fixed-shape JSON, or "" when absent.
+String jsonStringField(const String &json, const char *key)
+{
+    String needle = String("\"") + key + "\":\"";
+    int at = json.indexOf(needle);
+    if (at < 0)
+        return "";
+    int start = at + needle.length();
+    int end = json.indexOf('"', start);
+    return end < 0 ? "" : json.substring(start, end);
+}
+
 long jsonIntField(const String &json, const char *key)
 {
     String needle = String("\"") + key + "\":";
@@ -852,6 +862,28 @@ void onWsDeviceEvent(WStype_t type, uint8_t *payload, size_t length)
                 liveViewerCount = count >= 0 ? (int)count : 0;
                 LOGD("live view: %d viewer(s) watching", liveViewerCount);
             }
+            else if (msg.indexOf("\"type\":\"verdict\"") >= 0)
+            {
+                String uploadId = jsonStringField(msg, "uploadId");
+                String label = jsonStringField(msg, "label");
+                int at = msg.indexOf("\"confidence\":");
+                float confidence = at >= 0 ? msg.substring(at + 13).toFloat() : -1;
+                if (msg.indexOf("\"confidence\":null") >= 0)
+                    confidence = -1;
+                char code = label == "tree" ? 'T' : label == "object" ? 'O'
+                          : label == "unclear" ? 'U' : 'E';
+                bool matched = false;
+                portENTER_CRITICAL(&verdictMux);
+                if (uploadId.length() > 0 && uploadId == awaitedUploadId)
+                {
+                    pushedVerdict = code;
+                    pushedConfidence = confidence;
+                    matched = true;
+                }
+                portEXIT_CRITICAL(&verdictMux);
+                LOGI("server verdict for %s: %s%s", uploadId.c_str(), label.c_str(),
+                     matched ? "" : " (not the sample being waited for; ignored)");
+            }
             break;
         }
 
@@ -879,7 +911,7 @@ void sendLiveHeartbeatIfDue()
 
 void sendLiveFrameIfDue()
 {
-    if (!wsDevice.isConnected() || liveViewerCount <= 0 || !cameraReady)
+    if (!wsDevice.isConnected() || liveViewerCount <= 0 || !cameraReady || sampleBusy)
     {
         liveStreamActive = false;
         return;
@@ -1148,31 +1180,11 @@ bool postClassification(const String &uploadId, const ClassifyResult &verdict)
 // =====================================================
 //
 // For every packet from the ATmega:
-//   1. take a fresh photo
-//   2. start the server upload in a separate task, and at the same time
-//   3. ask OpenAI for the verdict and send it to the ATmega's OLED at once
-//   4. when the upload has finished, attach the verdict to it on the server
+//   1. take a fresh photo (live-view frames pause meanwhile, to leave RAM for TLS)
+//   2. upload it to the server (one HTTPS connection at a time)
+//   3. the server classifies it and pushes the verdict back over /ws/device
+//   4. forward that verdict to the ATmega's OLED as <C,x>
 // loop() keeps running throughout, so the live view and heartbeats never stall.
-
-
-void releaseUpload(UploadJob *job)
-{
-    if (__atomic_sub_fetch(&job->refs, 1, __ATOMIC_ACQ_REL) != 0)
-        return;
-    free(job->jpg);
-    vSemaphoreDelete(job->done);
-    delete job;
-}
-
-void uploadTask(void *arg)
-{
-    UploadJob *job = (UploadJob *)arg;
-    job->success = uploadSampleToServer(job->uploadId, job->ok, job->t, job->h, job->l,
-                                        job->reason, job->jpg, job->jpgLen);
-    xSemaphoreGive(job->done);
-    releaseUpload(job);
-    vTaskDelete(nullptr);
-}
 
 void storeHistory(const SampleJob &job, uint8_t *jpg, size_t jpgLen, char verdict)
 {
@@ -1194,13 +1206,49 @@ void storeHistory(const SampleJob &job, uint8_t *jpg, size_t jpgLen, char verdic
     xSemaphoreGive(historyMutex);
 }
 
+// Waits for the server's verdict for uploadId; returns 'E' on timeout.
+char waitForServerVerdict(uint32_t sampleId, unsigned long startedAt)
+{
+    unsigned long waitStart = millis();
+    while (millis() - waitStart < VERDICT_WAIT_MS)
+    {
+        char code = 0;
+        float confidence = -1;
+        portENTER_CRITICAL(&verdictMux);
+        code = pushedVerdict;
+        confidence = pushedConfidence;
+        portEXIT_CRITICAL(&verdictMux);
+        if (code != 0)
+        {
+            if (confidence >= 0)
+                LOGI("sample #%lu: server verdict %s (%.0f%% confident) %lu ms after the packet",
+                     (unsigned long)sampleId, labelFor(code), confidence * 100,
+                     millis() - startedAt);
+            else
+                LOGI("sample #%lu: server verdict %s", (unsigned long)sampleId, labelFor(code));
+            return code;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    LOGW("sample #%lu: no verdict from the server within %lu s%s", (unsigned long)sampleId,
+         VERDICT_WAIT_MS / 1000, wsDevice.isConnected() ? "" : " (server socket is down)");
+    return 'E';
+}
+
 void processSample(const SampleJob &job)
 {
     unsigned long startedAt = millis();
+    sampleBusy = true;
     // bootId changes every boot, the id is unique within a boot: unique overall, and matches the
     // server's X-Upload-Id charset (letters, digits, _ and -).
     String uploadId = String(bootId) + "-" + String(job.id);
     LOGI("sample #%lu (%s) started", (unsigned long)job.id, uploadId.c_str());
+
+    portENTER_CRITICAL(&verdictMux);
+    strlcpy(awaitedUploadId, uploadId.c_str(), sizeof(awaitedUploadId));
+    pushedVerdict = 0;
+    pushedConfidence = -1;
+    portEXIT_CRITICAL(&verdictMux);
 
     uint8_t *jpg = nullptr;
     size_t jpgLen = 0;
@@ -1212,64 +1260,42 @@ void processSample(const SampleJob &job)
     else
         LOGW("sample #%lu: photo capture FAILED", (unsigned long)job.id);
 
-    // Start the upload first so it overlaps the OpenAI call.
-    UploadJob *upload = new UploadJob();
-    upload->uploadId = uploadId;
-    upload->ok = job.ok;
-    upload->t = job.t;
-    upload->h = job.h;
-    upload->l = job.l;
-    strlcpy(upload->reason, job.reason, sizeof(upload->reason));
-    upload->done = xSemaphoreCreateBinary();
-    upload->refs = 2;
-    if (jpg != nullptr)
+    char verdict = 'E';
+    bool uploaded;
+    if (DEVICE_OPENAI)
     {
-        upload->jpg = (uint8_t *)largeAlloc(jpgLen);
-        if (upload->jpg)
-        {
-            memcpy(upload->jpg, jpg, jpgLen);
-            upload->jpgLen = jpgLen;
-        }
-        else
-            LOGW("sample #%lu: no memory for the upload's photo copy; uploading without photo",
-                 (unsigned long)job.id);
-    }
-
-    bool parallel = PARALLEL_UPLOAD && upload->done != nullptr &&
-                    xTaskCreatePinnedToCore(uploadTask, "upload", 12288, upload, 1, nullptr, 0) ==
-                        pdPASS;
-    if (PARALLEL_UPLOAD && !parallel)
-        LOGW("could not start the upload task; uploading after classification instead");
-
-    ClassifyResult verdict = classifyPhoto(jpg, jpgLen);
-    sendClassificationToAtmega(verdict.code);
-
-    bool uploaded = false;
-    if (parallel)
-    {
-        if (xSemaphoreTake(upload->done, pdMS_TO_TICKS(90000)) == pdTRUE)
-            uploaded = upload->success;
-        else
-            LOGE("sample #%lu: upload still running after 90 s", (unsigned long)job.id);
-        releaseUpload(upload);
+        // Old path: classify here first (the rover is waiting), then upload.
+        ClassifyResult result = classifyPhoto(jpg, jpgLen);
+        verdict = result.code;
+        sendClassificationToAtmega(verdict);
+        uploaded = uploadSampleToServer(uploadId, job.ok, job.t, job.h, job.l, job.reason, jpg,
+                                        jpgLen);
+        if (uploaded)
+            postClassification(uploadId, result);
     }
     else
     {
-        uploaded = uploadSampleToServer(uploadId, job.ok, job.t, job.h, job.l, job.reason,
-                                        upload->jpg, upload->jpgLen);
-        upload->refs = 1;
-        releaseUpload(upload);
+        LOGD("sample #%lu: uploading (free heap %u, largest internal block %u)",
+             (unsigned long)job.id, (unsigned)ESP.getFreeHeap(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        uploaded = uploadSampleToServer(uploadId, job.ok, job.t, job.h, job.l, job.reason, jpg,
+                                        jpgLen);
+        if (uploaded && jpg != nullptr)
+            verdict = waitForServerVerdict(job.id, startedAt);
+        else
+            LOGW("sample #%lu: no verdict possible (%s)", (unsigned long)job.id,
+                 uploaded ? "no photo" : "upload failed");
+        sendClassificationToAtmega(verdict);
     }
 
-    if (uploaded)
-        postClassification(uploadId, verdict);
-    else
-        LOGW("sample #%lu: verdict not sent to server because the upload failed",
-             (unsigned long)job.id);
+    portENTER_CRITICAL(&verdictMux);
+    awaitedUploadId[0] = '\0';
+    portEXIT_CRITICAL(&verdictMux);
+    sampleBusy = false;
 
-    storeHistory(job, jpg, jpgLen, verdict.code);
+    storeHistory(job, jpg, jpgLen, verdict);
     LOGI("sample #%lu done in %lu ms (verdict %s, upload %s)", (unsigned long)job.id,
-         millis() - startedAt, labelFor(verdict.code), uploaded ? "ok" : "FAILED");
+         millis() - startedAt, labelFor(verdict), uploaded ? "ok" : "FAILED");
 }
 
 void sampleTask(void *)
