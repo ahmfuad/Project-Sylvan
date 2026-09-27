@@ -54,6 +54,19 @@ const events = async (): Promise<DeviceEventsResponse['items']> => {
   return res.json<DeviceEventsResponse>().items;
 };
 
+/** Events are written asynchronously, so poll until they satisfy `ready` (or time out). */
+const eventsWhen = async (
+  ready: (items: DeviceEventsResponse['items']) => boolean,
+  timeoutMs = 3000,
+) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const items = await events();
+    if (ready(items) || Date.now() > deadline) return items;
+    await sleep(20);
+  }
+};
+
 describe('WS /ws/device authentication', () => {
   it('accepts the key as a header or a query parameter', async () => {
     await context();
@@ -106,8 +119,9 @@ describe('device connection lifecycle', () => {
       jpegQuality: 65,
     });
     expect((await status()).online).toBe(true);
-    await sleep(50);
-    expect((await events())[0]).toMatchObject({ type: 'connected' });
+    expect((await eventsWhen((items) => items.length > 0))[0]).toMatchObject({
+      type: 'connected',
+    });
   });
 
   it('replaces an older connection with close code 4002', async () => {
@@ -171,18 +185,21 @@ describe('device connection lifecycle', () => {
     device.send({ type: 'hello', bootId: 'boot-a', fw: 'fw-1' });
     for (let i = 0; i < 5; i++) device.send({ type: 'heartbeat', rssi: -60 });
     device.send({ type: 'hello', bootId: 'boot-a' });
-    await sleep(120);
-
-    let recorded = await events();
+    let recorded = await eventsWhen((items) => items.some((event) => event.type === 'boot'));
+    await sleep(120); // time for any (wrong) extra boot or heartbeat events to land
     expect(recorded.filter((event) => event.type === 'boot')).toHaveLength(1);
     expect(recorded.find((event) => event.type === 'boot')?.detail).toMatchObject({
       bootId: 'boot-a',
       fw: 'fw-1',
     });
 
-    device.send({ type: 'hello', bootId: 'boot-b' });
-    await sleep(120);
     recorded = await events();
+    expect(recorded.filter((event) => event.type === 'boot')).toHaveLength(1);
+
+    device.send({ type: 'hello', bootId: 'boot-b' });
+    recorded = await eventsWhen(
+      (items) => items.filter((event) => event.type === 'boot').length >= 2,
+    );
     expect(recorded.filter((event) => event.type === 'boot')).toHaveLength(2);
     // Only connect + two boots so far: heartbeats wrote nothing.
     expect(recorded).toHaveLength(3);
@@ -199,7 +216,10 @@ describe('device connection lifecycle', () => {
     const offline = await status();
     expect(offline).toMatchObject({ online: false, connectedAt: null, streaming: false });
     expect(offline.lastSeenAt).not.toBeNull();
-    expect((await events())[0]).toMatchObject({ type: 'disconnected', detail: { code: 1000 } });
+    expect((await eventsWhen((items) => items[0]?.type === 'disconnected'))[0]).toMatchObject({
+      type: 'disconnected',
+      detail: { code: 1000 },
+    });
   });
 });
 
