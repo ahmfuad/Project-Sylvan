@@ -186,6 +186,33 @@ describe('classification worker', () => {
     expect((await sampleOf(2)).ai).toBeNull();
   });
 
+  it('pushes the verdict to the rover over its socket, matched by upload id', async () => {
+    ctx = await createRealtimeContext({
+      photoClassifier: fake(() => ({
+        label: 'object',
+        confidence: 0.88,
+        model: 'fake-model',
+        note: 'OBJECT',
+      })),
+    });
+    await resetDatabase(ctx.sql);
+    const device = await ctx.device();
+    const viewer = await ctx.viewer();
+    await upload('boot9-4');
+    const verdict = await device.next((m) => m.type === 'verdict');
+    expect(verdict).toEqual({
+      type: 'verdict',
+      uploadId: 'boot9-4',
+      label: 'object',
+      confidence: 0.88,
+    });
+    // Viewers get the updated sample, never the device-only verdict message.
+    await viewer.next((m) => m.type === 'sample.updated');
+    expect(viewer.messages.some((m) => m.type === 'verdict' || m.type === 'verdict.ready')).toBe(
+      false,
+    );
+  });
+
   it('retries temporary failures, then gives up with an error verdict', async () => {
     const classifier = fake(() => {
       throw new ClassifierError('OpenAI HTTP 503: overloaded', true);

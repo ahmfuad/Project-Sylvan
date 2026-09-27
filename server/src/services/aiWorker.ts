@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import type { Classification } from '@sylvan/shared';
 import type { Sql } from '../db/client.js';
 import { ClassifierError, type PhotoClassifier } from './aiClassifier.js';
 import type { EventBus } from './events.js';
@@ -23,6 +24,7 @@ interface PendingRow {
   id: string;
   photo_key: string;
   ai_attempts: number;
+  upload_id: string | null;
 }
 
 export function createClassificationWorker(deps: {
@@ -49,6 +51,10 @@ export function createClassificationWorker(deps: {
   const idleMs = deps.idleMs ?? 5 * 60_000;
 
   let running = false;
+  /** Set by kick(); checked before sleeping so a kick that lands between a check and the
+   *  sleep is not lost (the photo would otherwise wait for the next idle check). */
+  const pending = { kicked: false };
+  const wasKicked = () => pending.kicked;
   let loop: Promise<void> | null = null;
   let wake: (() => void) | null = null;
   let timer: NodeJS.Timeout | null = null;
@@ -70,9 +76,15 @@ export function createClassificationWorker(deps: {
   }
 
   async function saveResult(
-    id: string,
-    result: { label: string; confidence: number | null; model: string | null; note: string },
+    row: PendingRow,
+    result: {
+      label: Classification;
+      confidence: number | null;
+      model: string | null;
+      note: string;
+    },
   ) {
+    const id = row.id;
     await sql`
       UPDATE samples
       SET ai_label = ${result.label}, ai_confidence = ${result.confidence},
@@ -81,12 +93,21 @@ export function createClassificationWorker(deps: {
       WHERE id = ${id}::bigint
     `;
     await announce(id);
+    // The rover waits for this to show the verdict on its OLED.
+    if (row.upload_id) {
+      events.publish({
+        type: 'verdict.ready',
+        uploadId: row.upload_id,
+        label: result.label,
+        confidence: result.confidence,
+      });
+    }
   }
 
   /** Returns 'done', 'idle' (nothing to do) or 'backoff' (retryable failure). */
   async function step(): Promise<'done' | 'idle' | 'backoff'> {
     const [row] = await sql<PendingRow[]>`
-      SELECT id, photo_key, ai_attempts FROM samples
+      SELECT id, photo_key, ai_attempts, upload_id FROM samples
       WHERE ai_label IS NULL AND photo_key IS NOT NULL
       ORDER BY id DESC
       LIMIT 1
@@ -98,7 +119,7 @@ export function createClassificationWorker(deps: {
       photo = await readFile(storage.resolve(row.photo_key));
     } catch (error) {
       log.warn({ sampleId: row.id, err: error }, 'photo file unreadable; not classifying');
-      await saveResult(row.id, {
+      await saveResult(row, {
         label: 'error',
         confidence: null,
         model: null,
@@ -109,7 +130,7 @@ export function createClassificationWorker(deps: {
 
     try {
       const verdict = await classifier.classify(photo);
-      await saveResult(row.id, verdict);
+      await saveResult(row, verdict);
       log.info(
         { sampleId: row.id, label: verdict.label, confidence: verdict.confidence },
         'photo classified',
@@ -121,7 +142,7 @@ export function createClassificationWorker(deps: {
       const attempts = row.ai_attempts + 1;
       if (!retryable || attempts >= maxAttempts) {
         log.warn({ sampleId: row.id, attempts, err: message }, 'photo classification failed');
-        await saveResult(row.id, {
+        await saveResult(row, {
           label: 'error',
           confidence: null,
           model: classifier.model,
@@ -140,6 +161,7 @@ export function createClassificationWorker(deps: {
 
   async function run() {
     while (running) {
+      pending.kicked = false;
       let outcome: 'done' | 'idle' | 'backoff';
       try {
         outcome = await step();
@@ -149,8 +171,9 @@ export function createClassificationWorker(deps: {
         outcome = 'backoff';
       }
       // stop() wakes any sleep below, so the loop condition ends it promptly.
-      if (outcome === 'idle') await sleep(idleMs);
-      else if (outcome === 'backoff') await sleep(retryDelayMs);
+      if (outcome === 'idle') {
+        if (!wasKicked()) await sleep(idleMs);
+      } else if (outcome === 'backoff') await sleep(retryDelayMs);
     }
   }
 
@@ -161,6 +184,7 @@ export function createClassificationWorker(deps: {
       loop = run();
     },
     kick() {
+      pending.kicked = true;
       wake?.();
     },
     async stop() {

@@ -221,6 +221,12 @@ export function createRealtime(deps: {
 
   // Bus events (sample.created, sample.updated, log.appended) go to every viewer as-is.
   const unsubscribe = bus.subscribe((event) => {
+    if (event.type === 'verdict.ready') {
+      const { uploadId, label, confidence } = event;
+      if (device.send({ type: 'verdict', uploadId, label, confidence }))
+        log.info({ uploadId, label }, 'sent photo verdict to device');
+      return;
+    }
     viewers.broadcast(event);
   });
 

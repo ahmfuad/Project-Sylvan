@@ -296,7 +296,17 @@ export interface ServerConfigMessage {
   jpegQuality: number;
 }
 
-export type ServerToDeviceMessage = ServerViewersMessage | ServerConfigMessage;
+/** The server's photo verdict for a sample the device uploaded (same X-Upload-Id). */
+export interface ServerVerdictMessage {
+  type: 'verdict';
+  uploadId: string;
+  label: Classification;
+  /** 0-1, or null when unavailable. */
+  confidence: number | null;
+}
+
+export type ServerToDeviceMessage =
+  ServerViewersMessage | ServerConfigMessage | ServerVerdictMessage;
 
 // Server → viewer
 export type StreamState = 'starting' | 'live' | 'stopped';

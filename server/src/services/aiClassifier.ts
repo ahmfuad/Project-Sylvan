@@ -13,14 +13,14 @@ import type { Classification } from '@sylvan/shared';
 export const DEFAULT_AI_MODEL = 'gpt-4.1-mini';
 
 export const AI_PROMPT =
-  'You classify one photo taken by a small line-following rover in a rooftop garden. ' +
-  'The camera faces sideways and the rover has stopped about 10 cm from the object, so the ' +
-  'photo is a close-up that may show only part of it (a pot or tub, soil, leaves, stems or a ' +
-  'trunk) and may be blurred. Judge the object closest to the camera, not the background. ' +
-  'Answer TREE if it is a living plant or small tree, or a pot, tub or planter with one ' +
-  'growing in it. Answer OBJECT for anything else (box, packet, bottle, wall, person, hand, ' +
-  'tool, empty pot), including printed pictures of plants. Answer UNCLEAR only if the photo ' +
-  'is so dark, blurred or blank that you cannot make out what it shows. ' +
+  "You classify one photo taken by a small rover in a rooftop garden. The rover's camera faces " +
+  'sideways and every photo is a close-up, usually blurred by motion and low light; blur alone is ' +
+  'normal and is NOT a reason to answer UNCLEAR. ' +
+  'Answer TREE if any living plant is visible close to the camera: leaves, stems, grass-like ' +
+  'blades, a trunk, or a pot, tub or planter with a plant in it. ' +
+  'Answer OBJECT if the photo shows no living plant: boxes, packets, bottles, baskets, boards, ' +
+  'the floor, walls, people, hands or tools, including printed pictures of plants. ' +
+  'Answer UNCLEAR only if the photo is almost completely black, white or featureless. ' +
   'Reply with exactly one word: TREE, OBJECT or UNCLEAR.';
 
 export interface AiVerdict {
