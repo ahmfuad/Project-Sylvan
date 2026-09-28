@@ -16,7 +16,8 @@ uint8_t sample_cycle_needs_light(uint32_t now);
 void sample_cycle_dht_done(uint8_t code, int16_t temp_c, uint8_t humidity);
 void sample_cycle_light_done(uint8_t success, uint16_t lux);
 uint8_t sample_cycle_succeeded(void);
-/* ESP32 photo verdict: 'T' tree, 'O' object, 'U' unclear, 'E' error, 0 none/timeout. */
+/* ESP32 photo verdict: 'H' healthy tree, 'S' unhealthy tree, 'T' tree (health not visible),
+ * 'O' object, 'U' unclear, 'E' error, 0 none/timeout. */
 uint8_t sample_cycle_classification(void);
 /* Confidence of that verdict in percent, or UART_NO_CONFIDENCE (0xFF) when unknown. */
 uint8_t sample_cycle_confidence(void);

@@ -40,7 +40,9 @@
 //   <D,i,text>\n            debug trail line (level d/i/w/e), forwarded to the dashboard
 //
 // Reply to the ATmega after each sample photo is classified (by the server's SylvanAI):
-//   <C,T,99>\n              tub tree / potted plant, with the confidence in percent
+//   <C,H,97>\n              tree, healthy (leaves green and intact), confidence in percent
+//   <C,S,99>\n              tree, unhealthy (yellow/brown/dry/wilting leaves)
+//   <C,T,99>\n              tree whose health is not visible (only the tub), confidence in percent
 //   <C,O,94>\n              random object
 //   <C,U,80>\n              photo too dark/blurry to tell
 //   <C,E>\n                 no answer (no photo, no Wi-Fi, API error); no confidence
@@ -111,20 +113,23 @@ const char *FW_VERSION = "sylvan-esp32cam-1.1";
 const char *OPENAI_API_KEY = "sk-somekey";   // replace with your own key before uploading
 const char *OPENAI_HOST = "api.openai.com";
 const char *OPENAI_PATH = "/v1/chat/completions";
-//gpt 5.5
-const char *OPENAI_MODEL = "gpt-5.5";
+// Used only when DEVICE_OPENAI is true (the server classifies photos by default).
+const char *OPENAI_MODEL = "gpt-4o-mini";
 
 // Sent as the system message; the photo follows as the user message. Keep it free of double
 // quotes and backslashes (it is pasted into the JSON body as-is).
 const char *OPENAI_PROMPT =
-    "You classify one photo taken by a small line-following rover in a rooftop garden. "
-    "The camera faces sideways and the rover has stopped about 10 cm from the object, so the "
-    "photo is a close-up that may show only part of it (a pot or tub, soil, leaves, stems or a "
-    "trunk), possibly blurred or poorly lit. Judge the object closest to the camera, not the "
-    "background. Answer TREE if it is a living plant or small tree, or a pot, tub or planter "
-    "with one growing in it. Answer OBJECT for anything else (box, bottle, wall, person, hand, "
-    "tool, empty pot). Answer UNCLEAR if the photo is too dark, blurry or blank to decide. "
-    "Reply with exactly one word: TREE, OBJECT or UNCLEAR.";
+    "You classify one photo taken by a small rover in a rooftop garden of potted trees. The "
+    "rover's camera faces sideways and every photo is a close-up, usually blurred by motion and "
+    "low light; blur alone is normal and is NOT a reason to answer UNCLEAR. If living leaves, "
+    "stems or a trunk of a plant are visible, judge the plant's health: answer HEALTHY if the "
+    "leaves look mostly green, firm and intact, or SICK if it clearly shows poor health, such as "
+    "many yellow, brown, dry, spotted, wilting or dead leaves, or pests. Answer POTTED if you see "
+    "a pot, tub or planter holding soil, pebbles or a plant, but no leaves to judge (the rover "
+    "often sees only the side of the tub). Answer OBJECT if there is no plant or planter: boxes, "
+    "packets, bottles, baskets, boards, the floor, walls, people, hands or tools, including "
+    "printed pictures of plants. Answer UNCLEAR only if the photo is almost completely black, "
+    "white or featureless. Reply with exactly one word: HEALTHY, SICK, POTTED, OBJECT or UNCLEAR.";
 
 // api.openai.com chains to GTS Root R4, which is also cross-signed by GlobalSign Root CA.
 // Both are trusted so a switch between the two chains doesn't break classification.
@@ -814,8 +819,10 @@ bool uploadSampleToServer(const String &uploadId, bool ok, float t, float h, flo
             if (verdictOut && body.indexOf("\"verdict\":{") >= 0)
             {
                 String label = jsonStringField(body, "label");
-                *verdictOut = label == "tree" ? 'T' : label == "object" ? 'O'
-                            : label == "unclear" ? 'U' : 'E';
+                String health = jsonStringField(body, "health");
+                *verdictOut = verdictCode(label, health);
+                if (health.length())
+                    label += " (" + health + ")";
                 int at = body.indexOf("\"confidence\":");
                 if (at >= 0 && body.indexOf("\"confidence\":null") < 0)
                 {
@@ -932,12 +939,12 @@ void onWsDeviceEvent(WStype_t type, uint8_t *payload, size_t length)
             {
                 String uploadId = jsonStringField(msg, "uploadId");
                 String label = jsonStringField(msg, "label");
+                String health = jsonStringField(msg, "health");
                 int at = msg.indexOf("\"confidence\":");
                 float confidence = at >= 0 ? msg.substring(at + 13).toFloat() : -1;
                 if (msg.indexOf("\"confidence\":null") >= 0)
                     confidence = -1;
-                char code = label == "tree" ? 'T' : label == "object" ? 'O'
-                          : label == "unclear" ? 'U' : 'E';
+                char code = verdictCode(label, health);
                 bool matched = false;
                 portENTER_CRITICAL(&verdictMux);
                 if (uploadId.length() > 0 && uploadId == awaitedUploadId)
@@ -1085,10 +1092,9 @@ ClassifyResult classifyPhoto(const uint8_t *jpg, size_t jpgLen)
         return result;
     }
 
-    // GPT-5.x are reasoning models: they reject max_tokens/temperature, and reasoning tokens
-    // count against max_completion_tokens, so reasoning is turned off for this one-word answer.
+    // gpt-4o-mini: a one-word answer, deterministic.
     String head = String("{\"model\":\"") + OPENAI_MODEL +
-                  "\",\"reasoning_effort\":\"none\",\"max_completion_tokens\":16,"
+                  "\",\"temperature\":0,\"max_completion_tokens\":5,"
                   "\"messages\":[{\"role\":\"system\",\"content\":\"" + OPENAI_PROMPT +
                   "\"},{\"role\":\"user\",\"content\":[{\"type\":\"image_url\","
                   "\"image_url\":{\"detail\":\"low\",\"url\":\"data:image/jpeg;base64,";
@@ -1172,7 +1178,9 @@ ClassifyResult classifyPhoto(const uint8_t *jpg, size_t jpgLen)
         letter++;
     String word = answer.substring(letter);
 
-    result.code = word.startsWith("TREE")      ? 'T'
+    result.code = word.startsWith("HEALTHY")   ? 'H'
+                  : word.startsWith("SICK")    ? 'S'
+                  : word.startsWith("POTTED")  ? 'T'
                   : word.startsWith("OBJECT")  ? 'O'
                   : word.startsWith("UNCLEAR") ? 'U'
                                                : 'E';
@@ -1211,7 +1219,17 @@ int confidencePercent(float confidence)
 
 const char *labelFor(char code)
 {
-    return code == 'T' ? "tree" : code == 'O' ? "object" : code == 'U' ? "unclear" : "error";
+    return code == 'H' ? "tree (healthy)" : code == 'S' ? "tree (unhealthy)"
+         : code == 'T' ? "tree" : code == 'O' ? "object" : code == 'U' ? "unclear" : "error";
+}
+
+// Server verdict -> ATmega code: H healthy tree, S unhealthy tree, T tree (health not visible),
+// O object, U unclear, E error.
+char verdictCode(const String &label, const String &health)
+{
+    if (label == "tree")
+        return health == "healthy" ? 'H' : health == "unhealthy" ? 'S' : 'T';
+    return label == "object" ? 'O' : label == "unclear" ? 'U' : 'E';
 }
 
 // POST /api/samples/classification: attach the verdict to an already uploaded sample.
@@ -1224,7 +1242,9 @@ bool postClassification(const String &uploadId, const ClassifyResult &verdict)
             note += '\\';
         note += ((uint8_t)*c < 0x20 || (uint8_t)*c >= 0x80) ? ' ' : *c;
     }
-    String json = String("{\"label\":\"") + labelFor(verdict.code) + "\",\"note\":\"" + note + "\"}";
+    const char *label = verdict.code == 'H' || verdict.code == 'S' || verdict.code == 'T' ? "tree"
+                      : verdict.code == 'O' ? "object" : verdict.code == 'U' ? "unclear" : "error";
+    String json = String("{\"label\":\"") + label + "\",\"note\":\"" + note + "\"}";
 
     for (uint8_t attempt = 1; attempt <= 2; attempt++)
     {

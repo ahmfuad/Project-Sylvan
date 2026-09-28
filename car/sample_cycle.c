@@ -70,7 +70,9 @@ static void log_verdict(uint8_t verdict, uint8_t percent)
         dbg_p(&d, PSTR(" s"));
     } else {
         dbg_p(&d, PSTR("verdict received: "));
-        dbg_p(&d, verdict == 'T' ? PSTR("TREE")
+        dbg_p(&d, verdict == 'H'   ? PSTR("TREE, HEALTHY")
+                  : verdict == 'S' ? PSTR("TREE, UNHEALTHY")
+                  : verdict == 'T' ? PSTR("TREE")
                   : verdict == 'O' ? PSTR("OBJECT")
                   : verdict == 'U' ? PSTR("UNCLEAR")
                                    : PSTR("ERROR"));

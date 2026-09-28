@@ -73,8 +73,8 @@ static void uart_puts_p(const char *s)
     while ((c = (char)pgm_read_byte(s++))) uart_putc(c);
 }
 
-/* Receiver for the ESP32's "<C,x>\n" or "<C,x,nn>\n" reply; x is T (tree), O (object),
- * U (unclear), E (error) and nn the confidence in percent. */
+/* Receiver for the ESP32's "<C,x>\n" or "<C,x,nn>\n" reply; x is H (healthy tree), S (unhealthy
+ * tree), T (tree, health not visible), O (object), U (unclear), E (error); nn is the confidence. */
 static volatile uint8_t classification, classification_confidence;
 static uint8_t rx_pos, rx_digits;
 static char rx_code;
@@ -88,7 +88,7 @@ void uart_rx_byte(char c)
     case 2: rx_pos = c == ',' ? 3 : 0; break;
     case 3:
         rx_code = c;
-        rx_pos = (c == 'T' || c == 'O' || c == 'U' || c == 'E') ? 4 : 0;
+        rx_pos = (c == 'T' || c == 'H' || c == 'S' || c == 'O' || c == 'U' || c == 'E') ? 4 : 0;
         break;
     case 4:
         if (c == '>') {

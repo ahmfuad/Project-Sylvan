@@ -246,8 +246,11 @@ static void update_display(uint32_t now)
             /* 21 columns per row. Row 1 shows SylvanAI's confidence when it was sent. */
             uint8_t verdict = sample_cycle_classification();
             uint8_t percent = sample_cycle_confidence();
-            if (verdict == 'T' || verdict == 'O' || verdict == 'U') {
-                oled_set_line(0, verdict == 'T'   ? "Tree detected"
+            if (verdict == 'H' || verdict == 'S' || verdict == 'T' || verdict == 'O' ||
+                verdict == 'U') {
+                oled_set_line(0, verdict == 'H'   ? "Tree: healthy"
+                                 : verdict == 'S' ? "Tree: unhealthy"
+                                 : verdict == 'T' ? "Tree detected"
                                  : verdict == 'O' ? "Random Object"
                                                   : "Unclear photo");
                 if (percent != UART_NO_CONFIDENCE) {
