@@ -27,8 +27,13 @@ export interface Sample {
   ai: AiClassification | null;
 }
 
+/** Plant health, judged only when leaves are visible. */
+export type PlantHealth = 'healthy' | 'unhealthy';
+
 export interface AiClassification {
   label: Classification;
+  /** For `tree` only: null when only the pot or tub was visible, so health could not be judged. */
+  health: PlantHealth | null;
   /**
    * Probability (0-1) the model gave its answer, from the answer token's log-probabilities;
    * null when the model did not report them (or for `error`).
@@ -66,7 +71,11 @@ export interface UploadResponse {
    * Only with `?wait=verdict`: the server's photo verdict, or null when it was not ready within
    * the wait (or there is no photo / classification is off).
    */
-  verdict?: { label: Classification; confidence: number | null } | null;
+  verdict?: {
+    label: Classification;
+    health: PlantHealth | null;
+    confidence: number | null;
+  } | null;
 }
 
 export type SampleStatusFilter = 'all' | 'ok' | 'failed';
@@ -306,6 +315,7 @@ export interface ServerVerdictMessage {
   type: 'verdict';
   uploadId: string;
   label: Classification;
+  health: PlantHealth | null;
   /** 0-1, or null when unavailable. */
   confidence: number | null;
 }

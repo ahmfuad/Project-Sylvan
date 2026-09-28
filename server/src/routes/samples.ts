@@ -12,7 +12,7 @@ import {
 } from '../lib/validation.js';
 import { isJpeg } from '../services/photoStorage.js';
 import type { EventBus } from '../services/events.js';
-import type { Classification } from '@sylvan/shared';
+import type { Classification, PlantHealth } from '@sylvan/shared';
 import type { SamplesService } from '../services/samples.js';
 
 interface SampleRoutesOptions {
@@ -30,7 +30,11 @@ interface SampleRoutesOptions {
 
 /** Resolves with the verdict for uploadId once published on the bus, or null after timeoutMs. */
 function waitForVerdict(events: EventBus, uploadId: string, timeoutMs: number) {
-  return new Promise<{ label: Classification; confidence: number | null } | null>((resolve) => {
+  return new Promise<{
+    label: Classification;
+    health: PlantHealth | null;
+    confidence: number | null;
+  } | null>((resolve) => {
     const timer = setTimeout(() => {
       unsubscribe();
       resolve(null);
@@ -39,7 +43,7 @@ function waitForVerdict(events: EventBus, uploadId: string, timeoutMs: number) {
       if (event.type !== 'verdict.ready' || event.uploadId !== uploadId) return;
       clearTimeout(timer);
       unsubscribe();
-      resolve({ label: event.label, confidence: event.confidence });
+      resolve({ label: event.label, health: event.health, confidence: event.confidence });
     });
   });
 }

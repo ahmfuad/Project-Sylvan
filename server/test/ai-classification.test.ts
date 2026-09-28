@@ -31,22 +31,33 @@ const completion = (content: string | null, top?: [string, number][]) => ({
 });
 
 describe('verdictFromCompletion', () => {
-  it('reads the label and sums the probability of every spelling of it', () => {
+  it('reads the answer and sums the probability of every spelling of it', () => {
     const verdict = verdictFromCompletion(
-      completion('TREE', [
-        ['TREE', 0.9],
-        [' tree', 0.04],
-        ['OBJECT', 0.05],
+      completion('SICK', [
+        ['S', 0.9],
+        [' sick', 0.04],
+        ['HE', 0.05],
         ['UN', 0.01],
       ]),
       'gpt-4.1-mini',
     );
     expect(verdict).toEqual({
       label: 'tree',
+      health: 'unhealthy',
       confidence: 0.94,
       model: 'gpt-4.1-mini',
-      note: 'TREE',
+      note: 'SICK',
     });
+  });
+
+  it('maps each answer to a label and plant health', () => {
+    const read = (answer: string) => verdictFromCompletion(completion(answer, [[answer, 1]]), 'm');
+    expect(read('HEALTHY')).toMatchObject({ label: 'tree', health: 'healthy' });
+    expect(read('SICK')).toMatchObject({ label: 'tree', health: 'unhealthy' });
+    // Only the tub was visible: a tree, but its health cannot be judged.
+    expect(read('POTTED')).toMatchObject({ label: 'tree', health: null });
+    expect(read('OBJECT')).toMatchObject({ label: 'object', health: null });
+    expect(read('UNCLEAR')).toMatchObject({ label: 'unclear', health: null });
   });
 
   it('handles split answer tokens (UNC + LEAR) and missing logprobs', () => {
@@ -159,6 +170,7 @@ describe('classification worker', () => {
   it('classifies a new upload, stores the confidence and pushes sample.updated', async () => {
     const classifier = fake(() => ({
       label: 'tree',
+      health: 'healthy',
       confidence: 0.94,
       model: 'fake-model',
       note: 'TREE',
@@ -173,6 +185,7 @@ describe('classification worker', () => {
     );
     expect(message.sample.ai).toMatchObject({
       label: 'tree',
+      health: 'healthy',
       confidence: 0.94,
       model: 'fake-model',
       note: 'TREE',
@@ -190,6 +203,7 @@ describe('classification worker', () => {
     ctx = await createRealtimeContext({
       photoClassifier: fake(() => ({
         label: 'object',
+        health: null,
         confidence: 0.88,
         model: 'fake-model',
         note: 'OBJECT',
@@ -204,6 +218,7 @@ describe('classification worker', () => {
       type: 'verdict',
       uploadId: 'boot9-4',
       label: 'object',
+      health: null,
       confidence: 0.88,
     });
     // Viewers get the updated sample, never the device-only verdict message.
@@ -215,7 +230,13 @@ describe('classification worker', () => {
 
   it('returns the verdict in the upload response with ?wait=verdict, also on a retry', async () => {
     ctx = await createRealtimeContext({
-      photoClassifier: fake(() => ({ label: 'tree', confidence: 0.99, model: 'm', note: 'TREE' })),
+      photoClassifier: fake(() => ({
+        label: 'tree',
+        health: null,
+        confidence: 0.99,
+        model: 'm',
+        note: 'TREE',
+      })),
     });
     await resetDatabase(ctx.sql);
     const send = async () =>
@@ -230,7 +251,7 @@ describe('classification worker', () => {
     expect(first.json()).toEqual({
       id: 1,
       photo: true,
-      verdict: { label: 'tree', confidence: 0.99 },
+      verdict: { label: 'tree', health: null, confidence: 0.99 },
     });
     // The rover retries when a response is lost: same upload id, same sample, same verdict.
     const retry = await send();
@@ -238,7 +259,7 @@ describe('classification worker', () => {
     expect(retry.json()).toEqual({
       id: 1,
       photo: true,
-      verdict: { label: 'tree', confidence: 0.99 },
+      verdict: { label: 'tree', health: null, confidence: 0.99 },
     });
   });
 
@@ -249,7 +270,13 @@ describe('classification worker', () => {
         () =>
           new Promise((resolve) =>
             setTimeout(() => {
-              resolve({ label: 'object', confidence: 0.5, model: 'm', note: 'OBJECT' });
+              resolve({
+                label: 'object',
+                health: null,
+                confidence: 0.5,
+                model: 'm',
+                note: 'OBJECT',
+              });
             }, 300),
           ),
       ),
@@ -269,6 +296,7 @@ describe('classification worker', () => {
     ctx = await createRealtimeContext({
       photoClassifier: fake(() => ({
         label: 'object',
+        health: null,
         confidence: 0.9,
         model: 'm',
         note: 'OBJECT',
@@ -318,6 +346,7 @@ describe('classification worker', () => {
     // Turned on later, reading the same photo folder.
     const classifier = fake(() => ({
       label: 'object',
+      health: null,
       confidence: 0.7,
       model: 'fake-model',
       note: 'OBJECT',

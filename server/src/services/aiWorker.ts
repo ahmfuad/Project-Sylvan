@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import type { Classification } from '@sylvan/shared';
+import type { Classification, PlantHealth } from '@sylvan/shared';
 import type { Sql } from '../db/client.js';
 import { ClassifierError, type PhotoClassifier } from './aiClassifier.js';
 import type { EventBus } from './events.js';
@@ -79,6 +79,7 @@ export function createClassificationWorker(deps: {
     row: PendingRow,
     result: {
       label: Classification;
+      health?: PlantHealth | null;
       confidence: number | null;
       model: string | null;
       note: string;
@@ -87,7 +88,8 @@ export function createClassificationWorker(deps: {
     const id = row.id;
     await sql`
       UPDATE samples
-      SET ai_label = ${result.label}, ai_confidence = ${result.confidence},
+      SET ai_label = ${result.label}, ai_health = ${result.health ?? null},
+          ai_confidence = ${result.confidence},
           ai_model = ${result.model}, ai_note = ${result.note.slice(0, 300)},
           ai_attempts = ai_attempts + 1, ai_classified_at = now()
       WHERE id = ${id}::bigint
@@ -99,6 +101,7 @@ export function createClassificationWorker(deps: {
         type: 'verdict.ready',
         uploadId: row.upload_id,
         label: result.label,
+        health: result.health ?? null,
         confidence: result.confidence,
       });
     }
@@ -132,7 +135,12 @@ export function createClassificationWorker(deps: {
       const verdict = await classifier.classify(photo);
       await saveResult(row, verdict);
       log.info(
-        { sampleId: row.id, label: verdict.label, confidence: verdict.confidence },
+        {
+          sampleId: row.id,
+          label: verdict.label,
+          health: verdict.health,
+          confidence: verdict.confidence,
+        },
         'photo classified',
       );
       return 'done';

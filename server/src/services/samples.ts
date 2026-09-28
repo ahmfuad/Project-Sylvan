@@ -1,6 +1,7 @@
 import type {
   Classification,
   NeighborsResponse,
+  PlantHealth,
   Sample,
   SampleListResponse,
   SampleStatusFilter,
@@ -25,6 +26,7 @@ export interface SampleRow {
   classification_note: string | null;
   classified_at: Date | null;
   ai_label: Classification | null;
+  ai_health: PlantHealth | null;
   ai_confidence: number | null;
   ai_model: string | null;
   ai_note: string | null;
@@ -54,9 +56,11 @@ export interface SamplesService {
   /** Sets the photo verdict for an upload; returns the updated sample, or null if unknown. */
   classify(uploadId: string, label: Classification, note: string | null): Promise<Sample | null>;
   /** The server's photo verdict for an upload, if it has one yet. */
-  aiVerdictFor(
-    uploadId: string,
-  ): Promise<{ label: Classification; confidence: number | null } | null>;
+  aiVerdictFor(uploadId: string): Promise<{
+    label: Classification;
+    health: PlantHealth | null;
+    confidence: number | null;
+  } | null>;
 }
 
 const toNumber = (value: string | null) => (value === null ? null : Number(value));
@@ -80,6 +84,7 @@ export function toSample(row: SampleRow): Sample {
         ? null
         : {
             label: row.ai_label,
+            health: row.ai_health,
             confidence: row.ai_confidence,
             model: row.ai_model,
             note: row.ai_note,
@@ -103,7 +108,7 @@ export function sampleFilters(
 export const sampleColumns = (sql: Sql) => sql`
   id, created_at, ok, temperature, humidity, lux, photo_key, photo_bytes,
   fail_reason, classification, classification_note, classified_at,
-  ai_label, ai_confidence, ai_model, ai_note, ai_classified_at,
+  ai_label, ai_health, ai_confidence, ai_model, ai_note, ai_classified_at,
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
 `;
 
@@ -224,10 +229,18 @@ export function createSamplesService(deps: {
     },
 
     async aiVerdictFor(uploadId) {
-      const [row] = await sql<{ ai_label: Classification | null; ai_confidence: number | null }[]>`
-        SELECT ai_label, ai_confidence FROM samples WHERE upload_id = ${uploadId}
+      const [row] = await sql<
+        {
+          ai_label: Classification | null;
+          ai_health: PlantHealth | null;
+          ai_confidence: number | null;
+        }[]
+      >`
+        SELECT ai_label, ai_health, ai_confidence FROM samples WHERE upload_id = ${uploadId}
       `;
-      return row?.ai_label ? { label: row.ai_label, confidence: row.ai_confidence } : null;
+      return row?.ai_label
+        ? { label: row.ai_label, health: row.ai_health, confidence: row.ai_confidence }
+        : null;
     },
 
     async classify(uploadId, label, note) {

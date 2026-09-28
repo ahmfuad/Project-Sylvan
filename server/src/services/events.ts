@@ -1,11 +1,17 @@
-import type { Classification, DeviceLog, Sample } from '@sylvan/shared';
+import type { Classification, DeviceLog, PlantHealth, Sample } from '@sylvan/shared';
 
 export type AppEvent =
   | { type: 'sample.created'; sample: Sample }
   | { type: 'sample.updated'; sample: Sample }
   | { type: 'log.appended'; entries: DeviceLog[] }
   /** For the rover only (sent over /ws/device), never to viewers. */
-  | { type: 'verdict.ready'; uploadId: string; label: Classification; confidence: number | null };
+  | {
+      type: 'verdict.ready';
+      uploadId: string;
+      label: Classification;
+      health: PlantHealth | null;
+      confidence: number | null;
+    };
 
 export type EventHandler = (event: AppEvent) => void;
 

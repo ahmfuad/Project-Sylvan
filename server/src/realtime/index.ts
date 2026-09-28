@@ -239,11 +239,17 @@ export function createRealtime(deps: {
 
   const unsubscribe = bus.subscribe((event) => {
     if (event.type === 'verdict.ready') {
-      const { uploadId, label, confidence } = event;
-      recentVerdicts.push({ message: { type: 'verdict', uploadId, label, confidence }, at: now() });
+      const { uploadId, label, health, confidence } = event;
+      const message: ServerVerdictMessage = {
+        type: 'verdict',
+        uploadId,
+        label,
+        health,
+        confidence,
+      };
+      recentVerdicts.push({ message, at: now() });
       if (recentVerdicts.length > 10) recentVerdicts.shift();
-      if (device.send({ type: 'verdict', uploadId, label, confidence }))
-        log.info({ uploadId, label }, 'sent photo verdict to device');
+      if (device.send(message)) log.info({ uploadId, label }, 'sent photo verdict to device');
       return;
     }
     viewers.broadcast(event);

@@ -27,7 +27,10 @@ export function ClassificationBadge({
   const server = source === 'best' ? sample.ai : null;
   const verdict = server?.label ?? sample.classification;
   if (verdict === null) return null;
-  const { label, className: tone } = STYLES[verdict];
+  const health = verdict === 'tree' ? (server?.health ?? null) : null;
+  const { label, className: base } = STYLES[verdict];
+  // An unhealthy tree is flagged in the warning colour so it stands out in lists.
+  const tone = health === 'unhealthy' ? 'bg-warn-soft text-ink' : base;
   const confidence = server?.confidence ?? null;
   return (
     <span
@@ -40,6 +43,7 @@ export function ClassificationBadge({
       ) : null}
       <span className="sr-only">Photo classified as </span>
       {label}
+      {health && <span>· {health === 'healthy' ? 'Healthy' : 'Unhealthy'}</span>}
       {confidence !== null && verdict !== 'error' && (
         <span className="font-normal tabular">
           <span className="sr-only">, confidence</span> {formatConfidence(confidence)}

@@ -1,4 +1,4 @@
-import type { Classification } from '@sylvan/shared';
+import type { Classification, PlantHealth } from '@sylvan/shared';
 
 /**
  * Classifies a rover photo with the OpenAI Chat Completions API.
@@ -13,18 +13,23 @@ import type { Classification } from '@sylvan/shared';
 export const DEFAULT_AI_MODEL = 'gpt-4.1-mini';
 
 export const AI_PROMPT =
-  "You classify one photo taken by a small rover in a rooftop garden. The rover's camera faces " +
-  'sideways and every photo is a close-up, usually blurred by motion and low light; blur alone is ' +
-  'normal and is NOT a reason to answer UNCLEAR. ' +
-  'Answer TREE if any living plant is visible close to the camera: leaves, stems, grass-like ' +
-  'blades, a trunk, or a pot, tub or planter with a plant in it. ' +
-  'Answer OBJECT if the photo shows no living plant: boxes, packets, bottles, baskets, boards, ' +
-  'the floor, walls, people, hands or tools, including printed pictures of plants. ' +
+  "You classify one photo taken by a small rover in a rooftop garden of potted trees. The rover's " +
+  'camera faces sideways and every photo is a close-up, usually blurred by motion and low light; ' +
+  'blur alone is normal and is NOT a reason to answer UNCLEAR. ' +
+  "If living leaves, stems or a trunk of a plant are visible, judge the plant's health: answer " +
+  'HEALTHY if the leaves look mostly green, firm and intact, or SICK if it clearly shows poor ' +
+  'health, such as many yellow, brown, dry, spotted, wilting or dead leaves, or pests. ' +
+  'Answer POTTED if you see a pot, tub or planter holding soil, pebbles or a plant, but no leaves ' +
+  'to judge (the rover often sees only the side of the tub). ' +
+  'Answer OBJECT if there is no plant or planter: boxes, packets, bottles, baskets, boards, the ' +
+  'floor, walls, people, hands or tools, including printed pictures of plants. ' +
   'Answer UNCLEAR only if the photo is almost completely black, white or featureless. ' +
-  'Reply with exactly one word: TREE, OBJECT or UNCLEAR.';
+  'Reply with exactly one word: HEALTHY, SICK, POTTED, OBJECT or UNCLEAR.';
 
 export interface AiVerdict {
   label: Classification;
+  /** Tree health when leaves were visible; null otherwise. */
+  health: PlantHealth | null;
   /** 0-1, or null when the model reported no logprobs. */
   confidence: number | null;
   model: string;
@@ -47,12 +52,18 @@ export class ClassifierError extends Error {
   }
 }
 
-const LABEL_BY_INITIAL: Record<string, Classification> = { T: 'tree', O: 'object', U: 'unclear' };
+/** The five answers start with different letters, so the first token alone decides the answer. */
+const ANSWERS: Record<string, { label: Classification; health: PlantHealth | null }> = {
+  H: { label: 'tree', health: 'healthy' },
+  S: { label: 'tree', health: 'unhealthy' },
+  P: { label: 'tree', health: null },
+  O: { label: 'object', health: null },
+  U: { label: 'unclear', health: null },
+};
 
-/** Maps an answer or token such as "TREE", " tree" or "UNC" to its label by its first letter. */
-function labelOf(text: string): Classification | null {
-  const initial = /[A-Za-z]/.exec(text)?.[0]?.toUpperCase();
-  return initial ? (LABEL_BY_INITIAL[initial] ?? null) : null;
+/** First letter of an answer or token such as "SICK", " sick" or "UNC", upper-cased. */
+function initialOf(text: string): string | null {
+  return /[A-Za-z]/.exec(text)?.[0]?.toUpperCase() ?? null;
 }
 
 interface CompletionJson {
@@ -74,35 +85,38 @@ export function verdictFromCompletion(json: unknown, model: string): AiVerdict {
     const refusal = choice?.message?.refusal;
     return {
       label: 'error',
+      health: null,
       confidence: null,
       model,
       note: refusal ? `refused: ${refusal.slice(0, 120)}` : 'empty answer',
     };
   }
 
-  const label = labelOf(answer);
-  if (!label) {
+  const initial = initialOf(answer);
+  const meaning = initial ? ANSWERS[initial] : undefined;
+  if (!initial || !meaning) {
     return {
       label: 'error',
+      health: null,
       confidence: null,
       model,
       note: `unexpected answer: ${answer.slice(0, 60)}`,
     };
   }
 
-  // Probability mass of every top candidate for the first token that means the same label
-  // ("TREE", "Tree", " tree"...), so the score is not split between spellings.
+  // Probability mass of every top candidate for the first token that starts the same answer
+  // ("SICK", "Sick", " sick"...), so the score is not split between spellings.
   const first = choice?.logprobs?.content?.[0];
   let confidence: number | null = null;
   if (first) {
     const candidates = first.top_logprobs?.length ? first.top_logprobs : [first];
     const mass = candidates
-      .filter((candidate) => labelOf(candidate.token) === label)
+      .filter((candidate) => initialOf(candidate.token) === initial)
       .reduce((sum, candidate) => sum + Math.exp(candidate.logprob), 0);
     confidence = Math.round(Math.min(1, mass) * 1000) / 1000;
   }
 
-  return { label, confidence, model, note: answer.slice(0, 60) };
+  return { ...meaning, confidence, model, note: answer.slice(0, 60) };
 }
 
 export function createOpenAiClassifier(options: {

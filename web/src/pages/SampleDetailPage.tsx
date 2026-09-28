@@ -202,6 +202,18 @@ export default function SampleDetailPage() {
                 <dd>
                   <ClassificationBadge sample={data} />
                 </dd>
+                {data.ai.label === 'tree' && (
+                  <>
+                    <dt className="text-ink-muted">Health</dt>
+                    <dd>
+                      {data.ai.health === 'healthy'
+                        ? 'Healthy: leaves look green and intact'
+                        : data.ai.health === 'unhealthy'
+                          ? 'Unhealthy: yellow, brown, dry or wilting leaves'
+                          : 'Not visible in the photo (only the pot or tub)'}
+                    </dd>
+                  </>
+                )}
                 {data.ai.confidence !== null && data.ai.label !== 'error' && (
                   <>
                     <dt className="text-ink-muted">Confidence</dt>
