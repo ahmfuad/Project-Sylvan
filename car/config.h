@@ -35,8 +35,8 @@
  * drift is a percentage error, so a lower baud rate does NOT make the link more tolerant;
  * calibrate OSCCAL or use a crystal if packets arrive garbled. */
 #define UART_BAUD 9600UL
-#define OBSTACLE_DISTANCE_CM 15U
-#define OBJECT_CLEAR_DISTANCE_CM 35U
+#define OBSTACLE_DISTANCE_CM 25U
+#define OBJECT_CLEAR_DISTANCE_CM 45U
 #define OBJECT_CLEAR_TIME_MS 500UL
 /* Long enough for a DHT11 retry: settle + first read + 2 s interval + second read. */
 #define SAMPLE_ACQUIRE_TIMEOUT_MS 4500UL
