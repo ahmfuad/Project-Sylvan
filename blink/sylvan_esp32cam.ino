@@ -297,6 +297,13 @@ volatile bool sampleBusy = false;
 // loop() holds this around wsDevice.loop(); the sample task holds it for the whole upload.
 SemaphoreHandle_t tlsMutex = nullptr;
 
+// Two TLS sessions (~40 KB of internal RAM each) do not fit side by side: with the server socket
+// open, uploads fail with "connection refused" (sometimes after a ~20 s hang). So the sample
+// task asks loop() to close the socket for the upload; loop() reopens it afterwards. The live
+// view pauses for those few seconds; the verdict arrives in the upload response anyway.
+volatile bool wsPauseRequested = false;   // set by the sample task
+volatile bool wsPaused = false;           // set by loop() once the socket is closed
+
 // The local MJPEG stream on port 81 costs ~10 KB of internal RAM (its own server task) that the
 // uploads need. The dashboard's Live page does not use it. Set to true only for local debugging.
 const bool LOCAL_STREAM_SERVER = false;
@@ -893,7 +900,10 @@ void onWsDeviceEvent(WStype_t type, uint8_t *payload, size_t length)
         }
 
         case WStype_DISCONNECTED:
-            LOGW("server socket disconnected; retrying every 5 s");
+            if (wsPauseRequested)
+                LOGD("server socket closed for the upload (frees RAM)");
+            else
+                LOGW("server socket disconnected; retrying every 5 s");
             liveStreamActive = false;
             liveViewerCount = 0;
             break;
@@ -1355,13 +1365,20 @@ void processSample(const SampleJob &job)
         LOGD("sample #%lu: uploading (free heap %u, largest internal block %u)",
              (unsigned long)job.id, (unsigned)ESP.getFreeHeap(),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-        // Wait for the server socket to finish any handshake, then keep it quiet while we upload.
+        // Close the server socket so the upload gets the RAM for its own TLS session.
+        wsPauseRequested = true;
+        for (int waited = 0; !wsPaused && waited < 3000; waited += 20)
+            vTaskDelay(pdMS_TO_TICKS(20));
+        LOGD("sample #%lu: socket %s, free heap %u, largest internal block %u",
+             (unsigned long)job.id, wsPaused ? "closed" : "NOT closed", (unsigned)ESP.getFreeHeap(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         xSemaphoreTake(tlsMutex, portMAX_DELAY);
         char fromResponse = 0;
         float confidence = -1;
         uploaded = uploadSampleToServer(uploadId, job.ok, job.t, job.h, job.l, job.reason, jpg,
                                         jpgLen, &fromResponse, &confidence);
         xSemaphoreGive(tlsMutex);
+        wsPauseRequested = false;   // loop() reopens the socket
         if (uploaded && fromResponse != 0)
             verdict = fromResponse;
         else if (uploaded && jpg != nullptr)
@@ -2429,7 +2446,18 @@ void loop()
     server.handleClient();
     // Skip the socket's turn while an upload holds the TLS lock (a few seconds at most); the
     // server tolerates missed pings for ~40 s.
-    if (xSemaphoreTake(tlsMutex, 0) == pdTRUE)
+    if (wsPauseRequested && !wsPaused)
+    {
+        mark("loop: closing socket");
+        if (wsDevice.isConnected())
+            wsDevice.disconnect();
+        wsPaused = true;
+    }
+    else if (!wsPauseRequested && wsPaused)
+    {
+        wsPaused = false;   // wsDevice.loop() below reconnects on its own
+    }
+    if (!wsPaused && xSemaphoreTake(tlsMutex, 0) == pdTRUE)
     {
         mark("loop: server socket");
         wsDevice.loop();
