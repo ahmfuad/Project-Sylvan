@@ -238,6 +238,9 @@ bool liveStreamActive = false;       // true once a frame has actually been sent
 unsigned long lastLiveHeartbeatAt = 0;
 unsigned long lastLiveFrameAt = 0;
 const unsigned long LIVE_HEARTBEAT_INTERVAL_MS = 5000;   // well under the server's 30s timeout
+// Device-side cap on live-view frames, whatever the server asks for: capturing and encoding
+// frames is what was running when the interrupt watchdog reset the ESP32.
+const uint16_t LIVE_MAX_FPS = 3;
 const size_t LIVE_MAX_FRAME_BYTES = 190000;              // stay under the server's 200 KB cap
 
 
@@ -531,7 +534,9 @@ bool initCamera()
     config.pin_pwdn  = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
 
-    config.xclk_freq_hz = 20000000;
+    // 10 MHz (not 20): the frame-transfer interrupt keeps up while Wi-Fi is busy. At 20 MHz the
+    // ESP32 hit the interrupt watchdog while capturing live-view frames.
+    config.xclk_freq_hz = 10000000;
 
     // GC2145 has no hardware JPEG encoder
     config.pixel_format = PIXFORMAT_RGB565;
@@ -542,6 +547,9 @@ bool initCamera()
         Serial.println("PSRAM: FOUND");
         config.frame_size  = FRAMESIZE_QVGA;      // 320 x 240
         config.fb_location = CAMERA_FB_IN_PSRAM;
+        // Two buffers (~150 KB each, in PSRAM): what CAMERA_GRAB_LATEST expects, so the driver
+        // always has a free buffer to fill while the previous frame is being encoded.
+        config.fb_count = 2;
     }
     else
     {
@@ -991,7 +999,8 @@ void sendLiveFrameIfDue()
     }
 
     unsigned long now = millis();
-    unsigned long intervalMs = 1000UL / (liveTargetFps > 0 ? liveTargetFps : 1);
+    uint16_t fps = liveTargetFps > LIVE_MAX_FPS ? LIVE_MAX_FPS : liveTargetFps;
+    unsigned long intervalMs = 1000UL / (fps > 0 ? fps : 1);
     if (now - lastLiveFrameAt < intervalMs)
         return;
 
