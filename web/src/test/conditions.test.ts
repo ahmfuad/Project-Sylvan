@@ -1,24 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateConditions, rate } from '../lib/conditions';
+import { averagesFrom, evaluateConditions } from '../lib/conditions';
 import { displayReadings } from '../lib/readings';
+import { makeStats } from './fixtures';
+
+const averages = { temperature: 30, humidity: 70, lux: 300 };
 
 describe('evaluateConditions', () => {
-  it('rates each reading and takes the worst as the verdict', () => {
-    expect(evaluateConditions({ temperature: 26, humidity: 60, lux: 5000 })).toEqual({
+  it('is good when every reading is at or above its current average', () => {
+    expect(evaluateConditions({ temperature: 30, humidity: 70, lux: 300 }, averages)).toEqual({
       verdict: 'good',
-      ratings: { temperature: 'good', humidity: 'good', lux: 'good' },
+      levels: { temperature: 'above', humidity: 'above', lux: 'above' },
     });
-    expect(evaluateConditions({ temperature: 35, humidity: 60, lux: 5000 }).verdict).toBe('fair');
-    expect(evaluateConditions({ temperature: 26, humidity: 95, lux: 900 }).verdict).toBe('poor');
   });
 
-  it('includes the band edges', () => {
-    expect(rate('temperature', 18)).toBe('good');
-    expect(rate('temperature', 32)).toBe('good');
-    expect(rate('temperature', 38)).toBe('fair');
-    expect(rate('temperature', 38.1)).toBe('poor');
-    expect(rate('lux', 199)).toBe('poor');
-    expect(rate('lux', 200)).toBe('fair');
+  it('is fair with one reading below average and poor with two or more', () => {
+    expect(evaluateConditions({ temperature: 31, humidity: 75, lux: 40 }, averages).verdict).toBe(
+      'fair',
+    );
+    expect(evaluateConditions({ temperature: 29, humidity: 60, lux: 400 }, averages).verdict).toBe(
+      'poor',
+    );
+  });
+
+  it('takes the averages from stats, and none while there are no readings', () => {
+    expect(averagesFrom(makeStats())).toEqual({ temperature: 24.3, humidity: 62.4, lux: 1250 });
+    expect(averagesFrom(undefined)).toBeNull();
   });
 });
 

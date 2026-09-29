@@ -14,14 +14,14 @@ import {
 } from '../components/ui/ClassificationBadge';
 import { ConditionsBadge } from '../components/ui/ConditionsBadge';
 import { StatusBadge } from '../components/ui/StatusBadge';
-import { CONDITION_RANGES, evaluateConditions, type Rating } from '../lib/conditions';
+import { evaluateConditions, useConditionAverages } from '../lib/conditions';
 import { METRICS, METRIC_KEYS } from '../lib/constants';
 import { useDebugMode } from '../lib/debugMode';
 import { displayReadings } from '../lib/readings';
 import { ErrorState } from '../components/ui/States';
 import { isNotFound } from '../lib/api';
 import { compareToAverage } from '../lib/compare';
-import { formatDateTime, formatNumber, formatUtc } from '../lib/format';
+import { formatDateTime, formatNumber, formatReading, formatUtc } from '../lib/format';
 import { useNeighbors, useSample, useStats } from '../lib/queries';
 import { rangeLabel } from '../lib/range';
 import { useFilters } from '../lib/useFilters';
@@ -304,22 +304,12 @@ function VerdictRow({
   );
 }
 
-const RATING_TEXT: Record<Rating, { label: string; className: string }> = {
-  good: { label: 'Good', className: 'text-ok' },
-  fair: { label: 'Fair', className: 'text-ink' },
-  poor: { label: 'Poor', className: 'text-failed' },
-};
-
-/** The weather verdict with the rating of each reading and its good range. */
+/** The weather verdict: each reading against its current average. */
 function ConditionsCard({ sample }: { sample: Parameters<typeof displayReadings>[0] }) {
+  const averages = useConditionAverages();
   const readings = displayReadings(sample);
-  if (!readings) return null;
-  const { verdict, ratings } = evaluateConditions(readings);
-  const range = (key: (typeof METRIC_KEYS)[number]) => {
-    const [low, high] = CONDITION_RANGES[key].good;
-    const unit = METRICS[key].unit;
-    return high === Infinity ? `${String(low)}+ ${unit}` : `${String(low)}–${String(high)} ${unit}`;
-  };
+  if (!readings || !averages) return null;
+  const { levels } = evaluateConditions(readings, averages);
   return (
     <Card aria-labelledby="conditions-heading" className="p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -332,14 +322,13 @@ function ConditionsCard({ sample }: { sample: Parameters<typeof displayReadings>
         {METRIC_KEYS.map((key) => (
           <div key={key} className="contents">
             <dt className="text-ink-muted">{METRICS[key].label}</dt>
-            <dd className={`font-semibold ${RATING_TEXT[ratings[key]].className}`}>
-              {RATING_TEXT[ratings[key]].label}
+            <dd className={`font-semibold ${levels[key] === 'above' ? 'text-ok' : 'text-failed'}`}>
+              {levels[key] === 'above' ? 'At or above average' : 'Below average'}
             </dd>
-            <dd className="text-ink-muted tabular">good: {range(key)}</dd>
+            <dd className="text-ink-muted tabular">average {formatReading(key, averages[key])}</dd>
           </div>
         ))}
       </dl>
-      <p className="sr-only">Overall: {RATING_TEXT[verdict].label}</p>
     </Card>
   );
 }
