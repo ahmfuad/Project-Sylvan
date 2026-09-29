@@ -239,12 +239,13 @@ export function createRealtime(deps: {
 
   const unsubscribe = bus.subscribe((event) => {
     if (event.type === 'verdict.ready') {
-      const { uploadId, label, health, confidence } = event;
+      const { uploadId, label, health, healthConfidence, confidence } = event;
       const message: ServerVerdictMessage = {
         type: 'verdict',
         uploadId,
         label,
         health,
+        healthConfidence,
         confidence,
       };
       recentVerdicts.push({ message, at: now() });

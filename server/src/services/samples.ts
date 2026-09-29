@@ -27,6 +27,7 @@ export interface SampleRow {
   classified_at: Date | null;
   ai_label: Classification | null;
   ai_health: PlantHealth | null;
+  ai_health_confidence: number | null;
   ai_confidence: number | null;
   ai_model: string | null;
   ai_note: string | null;
@@ -59,6 +60,7 @@ export interface SamplesService {
   aiVerdictFor(uploadId: string): Promise<{
     label: Classification;
     health: PlantHealth | null;
+    healthConfidence: number | null;
     confidence: number | null;
   } | null>;
 }
@@ -85,6 +87,7 @@ export function toSample(row: SampleRow): Sample {
         : {
             label: row.ai_label,
             health: row.ai_health,
+            healthConfidence: row.ai_health_confidence,
             confidence: row.ai_confidence,
             model: row.ai_model,
             note: row.ai_note,
@@ -108,7 +111,7 @@ export function sampleFilters(
 export const sampleColumns = (sql: Sql) => sql`
   id, created_at, ok, temperature, humidity, lux, photo_key, photo_bytes,
   fail_reason, classification, classification_note, classified_at,
-  ai_label, ai_health, ai_confidence, ai_model, ai_note, ai_classified_at,
+  ai_label, ai_health, ai_health_confidence, ai_confidence, ai_model, ai_note, ai_classified_at,
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
 `;
 
@@ -233,13 +236,20 @@ export function createSamplesService(deps: {
         {
           ai_label: Classification | null;
           ai_health: PlantHealth | null;
+          ai_health_confidence: number | null;
           ai_confidence: number | null;
         }[]
       >`
-        SELECT ai_label, ai_health, ai_confidence FROM samples WHERE upload_id = ${uploadId}
+        SELECT ai_label, ai_health, ai_health_confidence, ai_confidence FROM samples
+        WHERE upload_id = ${uploadId}
       `;
       return row?.ai_label
-        ? { label: row.ai_label, health: row.ai_health, confidence: row.ai_confidence }
+        ? {
+            label: row.ai_label,
+            health: row.ai_health,
+            healthConfidence: row.ai_health_confidence,
+            confidence: row.ai_confidence,
+          }
         : null;
     },
 

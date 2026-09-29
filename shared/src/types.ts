@@ -32,10 +32,12 @@ export type PlantHealth = 'healthy' | 'unhealthy';
 
 export interface AiClassification {
   label: Classification;
-  /** For `tree` only: null when only the pot or tub was visible, so health could not be judged. */
+  /** Trees only. */
   health: PlantHealth | null;
+  /** Probability (0-1) of the health answer; trees only. */
+  healthConfidence: number | null;
   /**
-   * Probability (0-1) the model gave its answer, from the answer token's log-probabilities;
+   * Probability (0-1) of the tree/object answer, from the answer token's log-probabilities;
    * null when the model did not report them (or for `error`).
    */
   confidence: number | null;
@@ -74,6 +76,7 @@ export interface UploadResponse {
   verdict?: {
     label: Classification;
     health: PlantHealth | null;
+    healthConfidence: number | null;
     confidence: number | null;
   } | null;
 }
@@ -316,6 +319,7 @@ export interface ServerVerdictMessage {
   uploadId: string;
   label: Classification;
   health: PlantHealth | null;
+  healthConfidence: number | null;
   /** 0-1, or null when unavailable. */
   confidence: number | null;
 }

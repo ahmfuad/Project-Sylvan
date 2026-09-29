@@ -196,66 +196,24 @@ export default function SampleDetailPage() {
             <h2 id="classification-heading" className="text-base font-semibold">
               Photo classification
             </h2>
-            {data.ai ? (
-              <dl className="mt-3 grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 text-sm">
-                <dt className="text-ink-muted">Verdict</dt>
-                <dd>
-                  <ClassificationBadge sample={data} />
-                </dd>
-                {data.ai.label === 'tree' && (
-                  <>
-                    <dt className="text-ink-muted">Health</dt>
-                    <dd>
-                      {data.ai.health === 'healthy'
-                        ? 'Healthy: leaves look green and intact'
-                        : data.ai.health === 'unhealthy'
-                          ? 'Unhealthy: yellow, brown, dry or wilting leaves'
-                          : 'Not visible in the photo (only the pot or tub)'}
-                    </dd>
-                  </>
+            {data.ai && (data.ai.label === 'tree' || data.ai.label === 'object') ? (
+              <dl className="mt-3 grid grid-cols-[auto_auto_1fr] items-center gap-x-4 gap-y-2 text-sm">
+                <VerdictRow
+                  term="Verdict"
+                  value={data.ai.label === 'tree' ? 'Tree' : 'Object'}
+                  confidence={data.ai.confidence}
+                />
+                {data.ai.label === 'tree' && data.ai.health && (
+                  <VerdictRow
+                    term="Health"
+                    value={data.ai.health === 'healthy' ? 'Healthy' : 'Unhealthy'}
+                    confidence={data.ai.healthConfidence}
+                  />
                 )}
-                {data.ai.confidence !== null && data.ai.label !== 'error' && (
-                  <>
-                    <dt className="text-ink-muted">Confidence</dt>
-                    <dd className="flex items-center gap-2">
-                      <span
-                        className="h-2 w-32 overflow-hidden rounded-full bg-surface-muted"
-                        aria-hidden="true"
-                      >
-                        <span
-                          className="block h-full rounded-full bg-brand"
-                          style={{ width: formatConfidence(data.ai.confidence) }}
-                        />
-                      </span>
-                      <span className="tabular">{formatConfidence(data.ai.confidence)}</span>
-                    </dd>
-                  </>
-                )}
-                {data.ai.note && (
-                  <>
-                    <dt className="text-ink-muted">Details</dt>
-                    <dd className="break-words">{data.ai.note}</dd>
-                  </>
-                )}
-                <dt className="text-ink-muted">Checked</dt>
-                <dd className="tabular">
-                  {/* The underlying model stays in the API data for debugging. */}
-                  {'SylvanAI, '}
-                  <RelativeTime value={data.ai.classifiedAt} />
-                </dd>
               </dl>
             ) : (
               <p className="mt-2 text-sm text-ink-muted">
-                {data.photoUrl
-                  ? 'The server is checking this photo. The verdict appears here on its own.'
-                  : 'No photo, so nothing to classify.'}
-              </p>
-            )}
-            {data.classification !== null && (
-              <p className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3 text-sm text-ink-muted">
-                Rover's own verdict:
-                <ClassificationBadge sample={data} source="rover" />
-                {data.classificationNote && <span>({data.classificationNote})</span>}
+                {data.photoUrl && !data.ai ? 'Checking the photo…' : 'No verdict.'}
               </p>
             )}
             {!data.ok && (
@@ -296,6 +254,43 @@ export default function SampleDetailPage() {
       <p className="mt-6 hidden text-xs text-ink-muted md:block">
         Tip: use ← and → to move to the previous or next sample.
       </p>
+    </>
+  );
+}
+
+/** One verdict with its confidence as a bar and a percentage. */
+function VerdictRow({
+  term,
+  value,
+  confidence,
+}: {
+  term: string;
+  value: string;
+  confidence: number | null;
+}) {
+  return (
+    <>
+      <dt className="text-ink-muted">{term}</dt>
+      <dd className="font-semibold">{value}</dd>
+      <dd className="flex items-center gap-2">
+        {confidence !== null && (
+          <>
+            <span
+              className="h-2 w-32 overflow-hidden rounded-full bg-surface-muted"
+              aria-hidden="true"
+            >
+              <span
+                className="block h-full rounded-full bg-brand"
+                style={{ width: formatConfidence(confidence) }}
+              />
+            </span>
+            <span className="tabular">
+              <span className="sr-only">confidence </span>
+              {formatConfidence(confidence)}
+            </span>
+          </>
+        )}
+      </dd>
     </>
   );
 }

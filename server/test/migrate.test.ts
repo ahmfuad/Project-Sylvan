@@ -25,6 +25,7 @@ describe('runMigrations', () => {
       '003_classification_and_device_logs.sql',
       '004_server_ai_classification.sql',
       '005_ai_plant_health.sql',
+      '006_ai_health_confidence.sql',
     ]);
   });
 

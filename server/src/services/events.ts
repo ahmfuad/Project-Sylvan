@@ -10,6 +10,7 @@ export type AppEvent =
       uploadId: string;
       label: Classification;
       health: PlantHealth | null;
+      healthConfidence: number | null;
       confidence: number | null;
     };
 

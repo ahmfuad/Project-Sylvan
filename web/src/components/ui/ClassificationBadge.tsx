@@ -1,5 +1,5 @@
 import type { Classification, Sample } from '@sylvan/shared';
-import { IconAlert, IconLeaf } from './Icons';
+import { IconLeaf } from './Icons';
 
 const STYLES: Record<Classification, { label: string; className: string }> = {
   tree: { label: 'Tree', className: 'bg-brand-soft text-ink' },
@@ -27,26 +27,34 @@ export function ClassificationBadge({
   const server = source === 'best' ? sample.ai : null;
   const verdict = server?.label ?? sample.classification;
   if (verdict === null) return null;
+  // Only the two verdicts are shown: tree/object (+ health for trees).
+  if (verdict !== 'tree' && verdict !== 'object') return null;
   const health = verdict === 'tree' ? (server?.health ?? null) : null;
   const { label, className: base } = STYLES[verdict];
   // An unhealthy tree is flagged in the warning colour so it stands out in lists.
   const tone = health === 'unhealthy' ? 'bg-warn-soft text-ink' : base;
   const confidence = server?.confidence ?? null;
+  const healthConfidence = server?.healthConfidence ?? null;
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${tone} ${className}`}
     >
-      {verdict === 'tree' ? (
-        <IconLeaf size={13} strokeWidth={2.5} />
-      ) : verdict === 'error' ? (
-        <IconAlert size={13} strokeWidth={2.5} />
-      ) : null}
+      {verdict === 'tree' && <IconLeaf size={13} strokeWidth={2.5} />}
       <span className="sr-only">Photo classified as </span>
       {label}
-      {health && <span>· {health === 'healthy' ? 'Healthy' : 'Unhealthy'}</span>}
-      {confidence !== null && verdict !== 'error' && (
+      {confidence !== null && (
         <span className="font-normal tabular">
           <span className="sr-only">, confidence</span> {formatConfidence(confidence)}
+        </span>
+      )}
+      {health && (
+        <span>
+          · {health === 'healthy' ? 'Healthy' : 'Unhealthy'}
+          {healthConfidence !== null && (
+            <span className="font-normal tabular">
+              <span className="sr-only">, confidence</span> {formatConfidence(healthConfidence)}
+            </span>
+          )}
         </span>
       )}
     </span>

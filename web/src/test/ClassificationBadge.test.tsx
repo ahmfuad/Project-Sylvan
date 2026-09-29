@@ -6,6 +6,7 @@ import { ClassificationBadge } from '../components/ui/ClassificationBadge';
 const ai = (overrides: Partial<AiClassification>): AiClassification => ({
   label: 'tree',
   health: null,
+  healthConfidence: null,
   confidence: 0.94,
   model: 'm',
   note: null,
@@ -14,22 +15,35 @@ const ai = (overrides: Partial<AiClassification>): AiClassification => ({
 });
 
 describe('ClassificationBadge', () => {
-  it('shows tree health and confidence', () => {
+  it('shows tree and health, each with its confidence', () => {
     render(
-      <ClassificationBadge sample={{ classification: null, ai: ai({ health: 'unhealthy' }) }} />,
+      <ClassificationBadge
+        sample={{
+          classification: null,
+          ai: ai({ confidence: 0.97, health: 'unhealthy', healthConfidence: 0.88 }),
+        }}
+      />,
     );
-    expect(screen.getByText(/Tree/)).toHaveTextContent('Tree· Unhealthy, confidence 94%');
+    expect(screen.getByText(/Tree/)).toHaveTextContent(
+      'Tree, confidence 97%· Unhealthy, confidence 88%',
+    );
   });
 
-  it('shows a tree without health when only the tub was visible', () => {
-    render(<ClassificationBadge sample={{ classification: null, ai: ai({ confidence: 1 }) }} />);
-    const badge = screen.getByText(/Tree/);
-    expect(badge).toHaveTextContent('100%');
+  it('shows objects with their confidence and no health', () => {
+    render(
+      <ClassificationBadge
+        sample={{ classification: null, ai: ai({ label: 'object', confidence: 0.99 }) }}
+      />,
+    );
+    const badge = screen.getByText(/Object/);
+    expect(badge).toHaveTextContent('Object, confidence 99%');
     expect(badge).not.toHaveTextContent(/Healthy|Unhealthy/);
   });
 
-  it("falls back to the rover's verdict when the server has none", () => {
-    render(<ClassificationBadge sample={{ classification: 'object', ai: null }} />);
-    expect(screen.getByText(/Object/)).toBeInTheDocument();
+  it('shows nothing for anything other than tree or object', () => {
+    const { container } = render(
+      <ClassificationBadge sample={{ classification: null, ai: ai({ label: 'error' }) }} />,
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 });

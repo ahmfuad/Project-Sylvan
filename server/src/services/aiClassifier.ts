@@ -1,38 +1,44 @@
 import type { Classification, PlantHealth } from '@sylvan/shared';
 
 /**
- * Classifies a rover photo with the OpenAI Chat Completions API.
- *
- * The model answers with one word (TREE, OBJECT or UNCLEAR). The confidence is not the model's
- * opinion of itself: it is the probability the model assigned to its answer, read from the
- * answer's first-token log-probabilities (the three answers start with different letters, so the
- * first token decides the label). That needs a model that returns logprobs, such as the
- * gpt-4.1 / gpt-4o families; reasoning models (gpt-5.x) do not, and then confidence is null.
+ * Classifies a rover photo with the OpenAI Chat Completions API, in two steps:
+ *   1. TREE or OBJECT
+ *   2. for trees only: HEALTHY or SICK
+ * Each confidence is not the model's opinion of itself: it is the probability the model gave its
+ * one-word answer, read from the first answer token's log-probabilities (the two answers of each
+ * step start with different letters). That needs a model that returns logprobs, such as the
+ * gpt-4.1 / gpt-4o families; with other models the confidences are null.
  */
 
 export const DEFAULT_AI_MODEL = 'gpt-4.1-mini';
 
-export const AI_PROMPT =
-  "You classify one photo taken by a small rover in a rooftop garden of potted trees. The rover's " +
-  'camera faces sideways and every photo is a close-up, usually blurred by motion and low light; ' +
-  'blur alone is normal and is NOT a reason to answer UNCLEAR. ' +
-  "If living leaves, stems or a trunk of a plant are visible, judge the plant's health: answer " +
-  'HEALTHY if the leaves look mostly green, firm and intact, or SICK if it clearly shows poor ' +
-  'health, such as many yellow, brown, dry, spotted, wilting or dead leaves, or pests. ' +
-  'Answer POTTED if you see a pot, tub or planter holding soil, pebbles or a plant, but no leaves ' +
-  'to judge (the rover often sees only the side of the tub). ' +
-  'Answer OBJECT if there is no plant or planter: boxes, packets, bottles, baskets, boards, the ' +
-  'floor, walls, people, hands or tools, including printed pictures of plants. ' +
-  'Answer UNCLEAR only if the photo is almost completely black, white or featureless. ' +
-  'Reply with exactly one word: HEALTHY, SICK, POTTED, OBJECT or UNCLEAR.';
+export const TYPE_PROMPT =
+  'You look at one photo taken by a small rover in a rooftop garden of potted trees. The camera ' +
+  'faces sideways and photos are close-ups, often blurred or dark. Decide whether the thing ' +
+  'closest to the camera is part of a potted tree or plant, or something else. Answer TREE for ' +
+  'leaves, stems, a trunk, or a pot, tub or planter holding soil, pebbles or a plant (the rover ' +
+  'often sees only the side of the tub). Answer OBJECT for anything else: boxes, packets, ' +
+  'bottles, baskets, boards, the floor, walls, people, hands or tools, including printed ' +
+  'pictures of plants. Reply with exactly one word: TREE or OBJECT.';
+
+export const HEALTH_PROMPT =
+  'This photo from a rooftop garden rover shows a potted tree or plant, as a blurry close-up. ' +
+  "Judge the plant's health from its leaves and stems only; the pot, soil, pebbles, blur and " +
+  'lighting say nothing about health. Answer SICK only if the visible leaves clearly show poor ' +
+  'health: many yellow, brown, dry, spotted, wilting or dead leaves, or pests. Otherwise answer ' +
+  'HEALTHY, including when no leaves are visible. Reply with exactly one word: HEALTHY or SICK.';
 
 export interface AiVerdict {
+  /** `tree` or `object`; `error` only when no answer could be read. */
   label: Classification;
-  /** Tree health when leaves were visible; null otherwise. */
-  health: PlantHealth | null;
-  /** 0-1, or null when the model reported no logprobs. */
+  /** Probability (0-1) of the tree/object answer, or null without logprobs. */
   confidence: number | null;
+  /** Trees only. */
+  health: PlantHealth | null;
+  /** Probability (0-1) of the health answer; trees only. */
+  healthConfidence: number | null;
   model: string;
+  /** The raw answers, e.g. "TREE / SICK", kept for debugging only. */
   note: string;
 }
 
@@ -52,16 +58,7 @@ export class ClassifierError extends Error {
   }
 }
 
-/** The five answers start with different letters, so the first token alone decides the answer. */
-const ANSWERS: Record<string, { label: Classification; health: PlantHealth | null }> = {
-  H: { label: 'tree', health: 'healthy' },
-  S: { label: 'tree', health: 'unhealthy' },
-  P: { label: 'tree', health: null },
-  O: { label: 'object', health: null },
-  U: { label: 'unclear', health: null },
-};
-
-/** First letter of an answer or token such as "SICK", " sick" or "UNC", upper-cased. */
+/** First letter of an answer or token such as "SICK", " sick" or "HEAL", upper-cased. */
 function initialOf(text: string): string | null {
   return /[A-Za-z]/.exec(text)?.[0]?.toUpperCase() ?? null;
 }
@@ -77,35 +74,28 @@ interface CompletionJson {
   }[];
 }
 
-/** Turns a chat completion response into a verdict. Pure, so it is unit-tested directly. */
-export function verdictFromCompletion(json: unknown, model: string): AiVerdict {
+export type ChoiceResult<T> =
+  { ok: true; value: T; confidence: number | null; answer: string } | { ok: false; note: string };
+
+/**
+ * Reads a one-word answer from a chat completion and maps it by its first letter (e.g. T/O, H/S).
+ * The confidence sums every top candidate for the first token that starts the same answer
+ * ("TREE", "Tree", " tree"...), so the score is not split between spellings. Pure, so it is
+ * unit-tested directly.
+ */
+export function readChoice<T>(json: unknown, answers: Record<string, T>): ChoiceResult<T> {
   const choice = (json as CompletionJson).choices?.[0];
   const answer = choice?.message?.content?.trim() ?? '';
   if (!answer) {
     const refusal = choice?.message?.refusal;
-    return {
-      label: 'error',
-      health: null,
-      confidence: null,
-      model,
-      note: refusal ? `refused: ${refusal.slice(0, 120)}` : 'empty answer',
-    };
+    return { ok: false, note: refusal ? `refused: ${refusal.slice(0, 120)}` : 'empty answer' };
   }
-
   const initial = initialOf(answer);
-  const meaning = initial ? ANSWERS[initial] : undefined;
-  if (!initial || !meaning) {
-    return {
-      label: 'error',
-      health: null,
-      confidence: null,
-      model,
-      note: `unexpected answer: ${answer.slice(0, 60)}`,
-    };
+  const value = initial === null ? undefined : answers[initial];
+  if (initial === null || value === undefined) {
+    return { ok: false, note: `unexpected answer: ${answer.slice(0, 60)}` };
   }
 
-  // Probability mass of every top candidate for the first token that starts the same answer
-  // ("SICK", "Sick", " sick"...), so the score is not split between spellings.
   const first = choice?.logprobs?.content?.[0];
   let confidence: number | null = null;
   if (first) {
@@ -115,9 +105,11 @@ export function verdictFromCompletion(json: unknown, model: string): AiVerdict {
       .reduce((sum, candidate) => sum + Math.exp(candidate.logprob), 0);
     confidence = Math.round(Math.min(1, mass) * 1000) / 1000;
   }
-
-  return { ...meaning, confidence, model, note: answer.slice(0, 60) };
+  return { ok: true, value, confidence, answer: answer.slice(0, 20) };
 }
+
+const TYPE_ANSWERS: Record<string, 'tree' | 'object'> = { T: 'tree', O: 'object' };
+const HEALTH_ANSWERS: Record<string, PlantHealth> = { H: 'healthy', S: 'unhealthy' };
 
 export function createOpenAiClassifier(options: {
   apiKey: string;
@@ -131,73 +123,98 @@ export function createOpenAiClassifier(options: {
   const url = `${options.baseUrl ?? 'https://api.openai.com'}/v1/chat/completions`;
   const timeoutMs = options.timeoutMs ?? 30_000;
 
+  /** One chat completion for a one-word answer about the photo; throws ClassifierError. */
+  async function ask(prompt: string, image: string): Promise<unknown> {
+    const body = {
+      model,
+      messages: [
+        { role: 'system', content: prompt },
+        {
+          role: 'user',
+          content: [{ type: 'image_url', image_url: { url: image, detail: 'low' } }],
+        },
+      ],
+      max_completion_tokens: 3,
+      temperature: 0,
+      logprobs: true,
+      top_logprobs: 5,
+    };
+
+    let response: Response;
+    try {
+      response = await doFetch(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${options.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new ClassifierError(`OpenAI request failed: ${reason}`, true);
+    }
+
+    const text = await response.text();
+    if (!response.ok) {
+      // Never echo a 401 body: it quotes part of the key.
+      let message = response.status === 401 ? 'API key rejected' : text.slice(0, 160);
+      try {
+        const parsed = JSON.parse(text) as { error?: { message?: string } };
+        if (response.status !== 401 && parsed.error?.message) {
+          message = parsed.error.message.slice(0, 160);
+        }
+      } catch {
+        // Keep the raw snippet.
+      }
+      throw new ClassifierError(
+        `OpenAI HTTP ${String(response.status)}: ${message}`,
+        response.status === 429 || response.status >= 500,
+      );
+    }
+
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new ClassifierError('OpenAI returned invalid JSON', true);
+    }
+  }
+
   return {
     model,
     async classify(photo) {
-      const body = {
+      const image = `data:image/jpeg;base64,${photo.toString('base64')}`;
+      const kind = readChoice(await ask(TYPE_PROMPT, image), TYPE_ANSWERS);
+      if (!kind.ok) {
+        return {
+          label: 'error',
+          confidence: null,
+          health: null,
+          healthConfidence: null,
+          model,
+          note: kind.note,
+        };
+      }
+      if (kind.value !== 'tree') {
+        return {
+          label: kind.value,
+          confidence: kind.confidence,
+          health: null,
+          healthConfidence: null,
+          model,
+          note: kind.answer,
+        };
+      }
+      const health = readChoice(await ask(HEALTH_PROMPT, image), HEALTH_ANSWERS);
+      return {
+        label: 'tree',
+        confidence: kind.confidence,
+        health: health.ok ? health.value : null,
+        healthConfidence: health.ok ? health.confidence : null,
         model,
-        messages: [
-          { role: 'system', content: AI_PROMPT },
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'image_url',
-                image_url: {
-                  url: `data:image/jpeg;base64,${photo.toString('base64')}`,
-                  detail: 'low',
-                },
-              },
-            ],
-          },
-        ],
-        max_completion_tokens: 3,
-        temperature: 0,
-        logprobs: true,
-        top_logprobs: 5,
+        note: health.ok ? `${kind.answer} / ${health.answer}` : `${kind.answer} / ${health.note}`,
       };
-
-      let response: Response;
-      try {
-        response = await doFetch(url, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${options.apiKey}`,
-          },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        throw new ClassifierError(`OpenAI request failed: ${reason}`, true);
-      }
-
-      const text = await response.text();
-      if (!response.ok) {
-        // Never echo a 401 body: it quotes part of the key.
-        let message = response.status === 401 ? 'API key rejected' : text.slice(0, 160);
-        try {
-          const parsed = JSON.parse(text) as { error?: { message?: string } };
-          if (response.status !== 401 && parsed.error?.message) {
-            message = parsed.error.message.slice(0, 160);
-          }
-        } catch {
-          // Keep the raw snippet.
-        }
-        throw new ClassifierError(
-          `OpenAI HTTP ${String(response.status)}: ${message}`,
-          response.status === 429 || response.status >= 500,
-        );
-      }
-
-      let json: unknown;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        throw new ClassifierError('OpenAI returned invalid JSON', true);
-      }
-      return verdictFromCompletion(json, model);
     },
   };
 }

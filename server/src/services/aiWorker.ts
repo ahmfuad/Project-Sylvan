@@ -80,6 +80,7 @@ export function createClassificationWorker(deps: {
     result: {
       label: Classification;
       health?: PlantHealth | null;
+      healthConfidence?: number | null;
       confidence: number | null;
       model: string | null;
       note: string;
@@ -89,6 +90,7 @@ export function createClassificationWorker(deps: {
     await sql`
       UPDATE samples
       SET ai_label = ${result.label}, ai_health = ${result.health ?? null},
+          ai_health_confidence = ${result.healthConfidence ?? null},
           ai_confidence = ${result.confidence},
           ai_model = ${result.model}, ai_note = ${result.note.slice(0, 300)},
           ai_attempts = ai_attempts + 1, ai_classified_at = now()
@@ -102,6 +104,7 @@ export function createClassificationWorker(deps: {
         uploadId: row.upload_id,
         label: result.label,
         health: result.health ?? null,
+        healthConfidence: result.healthConfidence ?? null,
         confidence: result.confidence,
       });
     }

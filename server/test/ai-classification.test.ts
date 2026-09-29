@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   ClassifierError,
   createOpenAiClassifier,
-  verdictFromCompletion,
+  HEALTH_PROMPT,
+  readChoice,
+  TYPE_PROMPT,
   type AiVerdict,
   type PhotoClassifier,
 } from '../src/services/aiClassifier.js';
@@ -30,56 +32,37 @@ const completion = (content: string | null, top?: [string, number][]) => ({
   ],
 });
 
-describe('verdictFromCompletion', () => {
+describe('readChoice', () => {
+  const TYPE = { T: 'tree', O: 'object' } as const;
+
   it('reads the answer and sums the probability of every spelling of it', () => {
-    const verdict = verdictFromCompletion(
-      completion('SICK', [
-        ['S', 0.9],
-        [' sick', 0.04],
-        ['HE', 0.05],
-        ['UN', 0.01],
+    const result = readChoice(
+      completion('TREE', [
+        ['TREE', 0.9],
+        [' tree', 0.04],
+        ['OBJECT', 0.06],
       ]),
-      'gpt-4.1-mini',
+      TYPE,
     );
-    expect(verdict).toEqual({
-      label: 'tree',
-      health: 'unhealthy',
-      confidence: 0.94,
-      model: 'gpt-4.1-mini',
-      note: 'SICK',
-    });
+    expect(result).toEqual({ ok: true, value: 'tree', confidence: 0.94, answer: 'TREE' });
   });
 
-  it('maps each answer to a label and plant health', () => {
-    const read = (answer: string) => verdictFromCompletion(completion(answer, [[answer, 1]]), 'm');
-    expect(read('HEALTHY')).toMatchObject({ label: 'tree', health: 'healthy' });
-    expect(read('SICK')).toMatchObject({ label: 'tree', health: 'unhealthy' });
-    // Only the tub was visible: a tree, but its health cannot be judged.
-    expect(read('POTTED')).toMatchObject({ label: 'tree', health: null });
-    expect(read('OBJECT')).toMatchObject({ label: 'object', health: null });
-    expect(read('UNCLEAR')).toMatchObject({ label: 'unclear', health: null });
-  });
-
-  it('handles split answer tokens (UNC + LEAR) and missing logprobs', () => {
-    expect(verdictFromCompletion(completion('UNCLEAR', [['UNC', 1]]), 'm')).toMatchObject({
-      label: 'unclear',
+  it('handles split tokens (HEAL + THY) and missing logprobs', () => {
+    const HEALTH = { H: 'healthy', S: 'unhealthy' } as const;
+    expect(readChoice(completion('HEALTHY', [['HEAL', 1]]), HEALTH)).toMatchObject({
+      value: 'healthy',
       confidence: 1,
     });
-    expect(verdictFromCompletion(completion('Object.'), 'm')).toMatchObject({
-      label: 'object',
+    expect(readChoice(completion('Sick.'), HEALTH)).toMatchObject({
+      value: 'unhealthy',
       confidence: null,
     });
   });
 
-  it('reports empty, refused and unexpected answers as error', () => {
-    expect(verdictFromCompletion(completion(''), 'm')).toMatchObject({
-      label: 'error',
-      note: 'empty answer',
-    });
-    expect(verdictFromCompletion(completion('Maybe a cat'), 'm')).toMatchObject({
-      label: 'error',
-    });
-    expect(verdictFromCompletion({}, 'm').label).toBe('error');
+  it('rejects empty, refused and unexpected answers', () => {
+    expect(readChoice(completion(''), TYPE)).toEqual({ ok: false, note: 'empty answer' });
+    expect(readChoice(completion('Maybe a cat'), TYPE)).toMatchObject({ ok: false });
+    expect(readChoice({}, TYPE)).toMatchObject({ ok: false });
   });
 });
 
@@ -87,19 +70,60 @@ describe('createOpenAiClassifier', () => {
   const respond = (status: number, body: unknown) =>
     (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
 
-  it('sends the photo with logprobs on and parses the answer', async () => {
-    let sent: Record<string, unknown> = {};
+  /** A fake OpenAI that answers each prompt from a table, recording the prompts it saw. */
+  const fakeOpenAi = (answers: Record<string, [string, number]>) => {
+    const prompts: string[] = [];
+    const bodies: Record<string, unknown>[] = [];
+    const fakeFetch = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string) as {
+        messages: { content: unknown }[];
+      } & Record<string, unknown>;
+      const prompt = body.messages[0]?.content as string;
+      prompts.push(prompt);
+      bodies.push(body);
+      const [answer, p] = answers[prompt === TYPE_PROMPT ? 'type' : 'health'] ?? ['?', 1];
+      return new Response(JSON.stringify(completion(answer, [[answer, p]])));
+    }) as unknown as typeof fetch;
+    return { fetch: fakeFetch, prompts, bodies };
+  };
+
+  it('asks tree-or-object, then health for trees, each with its own confidence', async () => {
+    const openAi = fakeOpenAi({ type: ['TREE', 0.97], health: ['SICK', 0.88] });
     const classifier = createOpenAiClassifier({
       apiKey: 'sk-test-0123456789abcdefghij',
-      fetch: (async (_url: string, init: RequestInit) => {
-        sent = JSON.parse(init.body as string) as Record<string, unknown>;
-        return new Response(JSON.stringify(completion('OBJECT', [['OBJECT', 0.8]])));
-      }) as unknown as typeof fetch,
+      fetch: openAi.fetch,
     });
     const verdict = await classifier.classify(Buffer.from([0xff, 0xd8, 1, 2]));
-    expect(verdict).toMatchObject({ label: 'object', confidence: 0.8, model: 'gpt-4.1-mini' });
-    expect(sent).toMatchObject({ model: 'gpt-4.1-mini', logprobs: true, top_logprobs: 5 });
-    expect(JSON.stringify(sent)).toContain('data:image/jpeg;base64,/9gBAg==');
+    expect(verdict).toEqual({
+      label: 'tree',
+      confidence: 0.97,
+      health: 'unhealthy',
+      healthConfidence: 0.88,
+      model: 'gpt-4.1-mini',
+      note: 'TREE / SICK',
+    });
+    expect(openAi.prompts).toEqual([TYPE_PROMPT, HEALTH_PROMPT]);
+    expect(openAi.bodies[0]).toMatchObject({
+      model: 'gpt-4.1-mini',
+      logprobs: true,
+      top_logprobs: 5,
+    });
+    expect(JSON.stringify(openAi.bodies[0])).toContain('data:image/jpeg;base64,/9gBAg==');
+  });
+
+  it('makes a single call for objects, with no health', async () => {
+    const openAi = fakeOpenAi({ type: ['OBJECT', 0.99] });
+    const verdict = await createOpenAiClassifier({
+      apiKey: 'sk-test-0123456789abcdefghij',
+      fetch: openAi.fetch,
+    }).classify(Buffer.from([0xff, 0xd8]));
+    expect(verdict).toMatchObject({
+      label: 'object',
+      confidence: 0.99,
+      health: null,
+      healthConfidence: null,
+    });
+    expect(openAi.prompts).toEqual([TYPE_PROMPT]);
   });
 
   it('marks rate limits and outages retryable, bad requests not, and hides 401 bodies', async () => {
@@ -171,6 +195,7 @@ describe('classification worker', () => {
     const classifier = fake(() => ({
       label: 'tree',
       health: 'healthy',
+      healthConfidence: 0.9,
       confidence: 0.94,
       model: 'fake-model',
       note: 'TREE',
@@ -186,6 +211,7 @@ describe('classification worker', () => {
     expect(message.sample.ai).toMatchObject({
       label: 'tree',
       health: 'healthy',
+      healthConfidence: 0.9,
       confidence: 0.94,
       model: 'fake-model',
       note: 'TREE',
@@ -204,6 +230,7 @@ describe('classification worker', () => {
       photoClassifier: fake(() => ({
         label: 'object',
         health: null,
+        healthConfidence: null,
         confidence: 0.88,
         model: 'fake-model',
         note: 'OBJECT',
@@ -219,6 +246,7 @@ describe('classification worker', () => {
       uploadId: 'boot9-4',
       label: 'object',
       health: null,
+      healthConfidence: null,
       confidence: 0.88,
     });
     // Viewers get the updated sample, never the device-only verdict message.
@@ -233,6 +261,7 @@ describe('classification worker', () => {
       photoClassifier: fake(() => ({
         label: 'tree',
         health: null,
+        healthConfidence: null,
         confidence: 0.99,
         model: 'm',
         note: 'TREE',
@@ -251,7 +280,7 @@ describe('classification worker', () => {
     expect(first.json()).toEqual({
       id: 1,
       photo: true,
-      verdict: { label: 'tree', health: null, confidence: 0.99 },
+      verdict: { label: 'tree', health: null, healthConfidence: null, confidence: 0.99 },
     });
     // The rover retries when a response is lost: same upload id, same sample, same verdict.
     const retry = await send();
@@ -259,7 +288,7 @@ describe('classification worker', () => {
     expect(retry.json()).toEqual({
       id: 1,
       photo: true,
-      verdict: { label: 'tree', health: null, confidence: 0.99 },
+      verdict: { label: 'tree', health: null, healthConfidence: null, confidence: 0.99 },
     });
   });
 
@@ -273,6 +302,7 @@ describe('classification worker', () => {
               resolve({
                 label: 'object',
                 health: null,
+                healthConfidence: null,
                 confidence: 0.5,
                 model: 'm',
                 note: 'OBJECT',
@@ -297,6 +327,7 @@ describe('classification worker', () => {
       photoClassifier: fake(() => ({
         label: 'object',
         health: null,
+        healthConfidence: null,
         confidence: 0.9,
         model: 'm',
         note: 'OBJECT',
@@ -347,6 +378,7 @@ describe('classification worker', () => {
     const classifier = fake(() => ({
       label: 'object',
       health: null,
+      healthConfidence: null,
       confidence: 0.7,
       model: 'fake-model',
       note: 'OBJECT',

@@ -33,6 +33,7 @@ function waitForVerdict(events: EventBus, uploadId: string, timeoutMs: number) {
   return new Promise<{
     label: Classification;
     health: PlantHealth | null;
+    healthConfidence: number | null;
     confidence: number | null;
   } | null>((resolve) => {
     const timer = setTimeout(() => {
@@ -43,7 +44,12 @@ function waitForVerdict(events: EventBus, uploadId: string, timeoutMs: number) {
       if (event.type !== 'verdict.ready' || event.uploadId !== uploadId) return;
       clearTimeout(timer);
       unsubscribe();
-      resolve({ label: event.label, health: event.health, confidence: event.confidence });
+      resolve({
+        label: event.label,
+        health: event.health,
+        healthConfidence: event.healthConfidence,
+        confidence: event.confidence,
+      });
     });
   });
 }
