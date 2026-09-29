@@ -23,10 +23,12 @@ export const TYPE_PROMPT =
 
 export const HEALTH_PROMPT =
   'This photo from a rooftop garden rover shows a potted tree or plant, as a blurry close-up. ' +
-  "Judge the plant's health from its leaves and stems only; the pot, soil, pebbles, blur and " +
-  'lighting say nothing about health. Answer SICK only if the visible leaves clearly show poor ' +
-  'health: many yellow, brown, dry, spotted, wilting or dead leaves, or pests. Otherwise answer ' +
-  'HEALTHY, including when no leaves are visible. Reply with exactly one word: HEALTHY or SICK.';
+  "Judge the plant's health from its branches, stems and leaves; blur and lighting say nothing " +
+  'about health. A healthy plant here has plenty of green, firm leaves. Answer SICK if the plant ' +
+  'has few or no leaves on its branches or stems (bare or leafless twigs, even if the stems are ' +
+  'green), or leaves that are yellow, brown, pale, dry, spotted, curled or wilting, or pests. ' +
+  'Answer HEALTHY if it has plenty of green, firm leaves. If the photo shows only the pot and ' +
+  'soil with no stems or leaves at all, answer HEALTHY. Reply with exactly one word: HEALTHY or SICK.';
 
 export interface AiVerdict {
   /** `tree` or `object`; `error` only when no answer could be read. */
