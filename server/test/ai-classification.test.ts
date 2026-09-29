@@ -109,6 +109,18 @@ describe('createOpenAiClassifier', () => {
       top_logprobs: 5,
     });
     expect(JSON.stringify(openAi.bodies[0])).toContain('data:image/jpeg;base64,/9gBAg==');
+    // The health call shows the two labelled example plants before the photo to judge.
+    const health = openAi.bodies[1] as { messages: { role: string; content: unknown }[] };
+    expect(health.messages.map((message) => message.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+      'user',
+    ]);
+    expect(health.messages[2]?.content).toBe('SICK');
+    expect(health.messages[4]?.content).toBe('HEALTHY');
   });
 
   it('makes a single call for objects, with no health', async () => {

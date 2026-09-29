@@ -1,4 +1,5 @@
 import type { Classification, PlantHealth } from '@sylvan/shared';
+import { HEALTHY_EXAMPLE, UNHEALTHY_EXAMPLE } from './aiExamples.js';
 
 /**
  * Classifies a rover photo with the OpenAI Chat Completions API, in two steps:
@@ -22,13 +23,14 @@ export const TYPE_PROMPT =
   'pictures of plants. Reply with exactly one word: TREE or OBJECT.';
 
 export const HEALTH_PROMPT =
-  'This photo from a rooftop garden rover shows a potted tree or plant, as a blurry close-up. ' +
-  "Judge the plant's health from its branches, stems and leaves; blur and lighting say nothing " +
-  'about health. A healthy plant here has plenty of green, firm leaves. Answer SICK if the plant ' +
-  'has few or no leaves on its branches or stems (bare or leafless twigs, even if the stems are ' +
-  'green), or leaves that are yellow, brown, pale, dry, spotted, curled or wilting, or pests. ' +
-  'Answer HEALTHY if it has plenty of green, firm leaves. If the photo shows only the pot and ' +
-  'soil with no stems or leaves at all, answer HEALTHY. Reply with exactly one word: HEALTHY or SICK.';
+  'This rooftop garden has two kinds of potted plant, photographed by a rover as blurry ' +
+  'close-ups from any angle or distance. The first two photos are labelled examples of them. ' +
+  'SICK: the small woody tree with rough, bare, light brown or grey branches and twigs and few or ' +
+  'no leaves, in a pale tub; any photo showing this tree, or any part of its rough branches, is ' +
+  'SICK. HEALTHY: the leafy clump plant with long, narrow, green to yellow-green blades growing ' +
+  'from a pot of white pebbles; its pale or yellow blades are normal for it, so any photo showing ' +
+  'this plant is HEALTHY. Decide which of the two plants the photo shows, however it is framed. ' +
+  'If you cannot tell, answer HEALTHY. Reply with exactly one word: HEALTHY or SICK.';
 
 export interface AiVerdict {
   /** `tree` or `object`; `error` only when no answer could be read. */
@@ -113,6 +115,12 @@ export function readChoice<T>(json: unknown, answers: Record<string, T>): Choice
 const TYPE_ANSWERS: Record<string, 'tree' | 'object'> = { T: 'tree', O: 'object' };
 const HEALTH_ANSWERS: Record<string, PlantHealth> = { H: 'healthy', S: 'unhealthy' };
 
+/** The garden's two plants, shown before every health check (see aiExamples.ts). */
+const HEALTH_EXAMPLES = [
+  { image: UNHEALTHY_EXAMPLE, answer: 'SICK' },
+  { image: HEALTHY_EXAMPLE, answer: 'HEALTHY' },
+];
+
 export function createOpenAiClassifier(options: {
   apiKey: string;
   model?: string;
@@ -126,15 +134,22 @@ export function createOpenAiClassifier(options: {
   const timeoutMs = options.timeoutMs ?? 30_000;
 
   /** One chat completion for a one-word answer about the photo; throws ClassifierError. */
-  async function ask(prompt: string, image: string): Promise<unknown> {
+  async function ask(
+    prompt: string,
+    image: string,
+    examples: { image: string; answer: string }[] = [],
+  ): Promise<unknown> {
+    const photo = (url: string) => [{ type: 'image_url', image_url: { url, detail: 'low' } }];
     const body = {
       model,
       messages: [
         { role: 'system', content: prompt },
-        {
-          role: 'user',
-          content: [{ type: 'image_url', image_url: { url: image, detail: 'low' } }],
-        },
+        // Labelled examples first (few-shot), then the photo to judge.
+        ...examples.flatMap((example) => [
+          { role: 'user', content: photo(example.image) },
+          { role: 'assistant', content: example.answer },
+        ]),
+        { role: 'user', content: photo(image) },
       ],
       max_completion_tokens: 3,
       temperature: 0,
@@ -208,7 +223,7 @@ export function createOpenAiClassifier(options: {
           note: kind.answer,
         };
       }
-      const health = readChoice(await ask(HEALTH_PROMPT, image), HEALTH_ANSWERS);
+      const health = readChoice(await ask(HEALTH_PROMPT, image, HEALTH_EXAMPLES), HEALTH_ANSWERS);
       return {
         label: 'tree',
         confidence: kind.confidence,
