@@ -32,6 +32,8 @@ export interface SampleRow {
   ai_model: string | null;
   ai_note: string | null;
   ai_classified_at: Date | null;
+  /** [temperature, humidity, lux] averages for failed samples, as numeric strings. */
+  fallback: (string | null)[] | null;
 }
 
 export interface CreateSampleInput {
@@ -67,6 +69,16 @@ export interface SamplesService {
 
 const toNumber = (value: string | null) => (value === null ? null : Number(value));
 
+function toFallback(values: (string | null)[] | null): Sample['fallback'] {
+  const [temperature, humidity, lux] = values ?? [];
+  if (temperature == null || humidity == null || lux == null) return null;
+  return {
+    temperature: Math.round(Number(temperature) * 10) / 10,
+    humidity: Math.round(Number(humidity) * 10) / 10,
+    lux: Math.round(Number(lux)),
+  };
+}
+
 export function toSample(row: SampleRow): Sample {
   return {
     id: Number(row.id),
@@ -78,6 +90,7 @@ export function toSample(row: SampleRow): Sample {
     photoUrl: row.photo_key === null ? null : `/photos/${row.photo_key}`,
     photoBytes: row.photo_bytes,
     failReason: row.fail_reason,
+    fallback: toFallback(row.fallback),
     classification: row.classification,
     classificationNote: row.classification_note,
     classifiedAt: row.classified_at === null ? null : row.classified_at.toISOString(),
@@ -108,10 +121,29 @@ export function sampleFilters(
   `;
 }
 
+/**
+ * Display fallback for failed samples: averages of the 10 successful samples nearest in time
+ * (before or after), so a failure early in the data still gets values. Null for OK samples.
+ */
+const fallbackColumn = (sql: Sql) => sql`
+  CASE WHEN samples.ok THEN NULL ELSE (
+    SELECT ARRAY[avg(near.temperature), avg(near.humidity), avg(near.lux)]
+    FROM (
+      SELECT p.temperature, p.humidity, p.lux
+      FROM samples p
+      WHERE p.ok
+      ORDER BY abs(extract(epoch FROM p.created_at - samples.created_at))
+      LIMIT 10
+    ) near
+    HAVING count(*) > 0
+  ) END AS fallback
+`;
+
 export const sampleColumns = (sql: Sql) => sql`
   id, created_at, ok, temperature, humidity, lux, photo_key, photo_bytes,
   fail_reason, classification, classification_note, classified_at,
   ai_label, ai_health, ai_health_confidence, ai_confidence, ai_model, ai_note, ai_classified_at,
+  ${fallbackColumn(sql)},
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
 `;
 

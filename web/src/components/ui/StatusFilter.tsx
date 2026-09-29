@@ -1,4 +1,5 @@
 import type { SampleStatusFilter } from '@sylvan/shared';
+import { useDebugMode } from '../../lib/debugMode';
 
 const OPTIONS: { value: SampleStatusFilter; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -13,6 +14,9 @@ export function StatusFilter({
   value: SampleStatusFilter;
   onChange: (value: SampleStatusFilter) => void;
 }) {
+  // Filtering by failed samples is a debugging tool; production shows every sample alike.
+  const debug = useDebugMode();
+  if (!debug) return null;
   return (
     <div
       role="group"

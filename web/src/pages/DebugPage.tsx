@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '../components/ui/Button';
 import { ErrorState } from '../components/ui/States';
 import { api } from '../lib/api';
+import { setDebugMode, useDebugMode } from '../lib/debugMode';
 import { useLiveSocket, useSocketSnapshot } from '../lib/socketContext';
 
 const PAGE_SIZE = 300;
@@ -74,6 +75,7 @@ function Select<T extends string>({
 
 export default function DebugPage() {
   const { status } = useSocketSnapshot();
+  const debugMode = useDebugMode();
   const [source, setSource] = useState<SourceFilter>('all');
   const [level, setLevel] = useState<LevelFilter>('all');
   const [search, setSearch] = useState('');
@@ -95,6 +97,16 @@ export default function DebugPage() {
       <title>Debug · Sylvan</title>
       <div className="mb-4 space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Debug trail</h1>
+        <label className="flex min-h-11 items-center gap-2 text-sm font-medium">
+          <input
+            type="checkbox"
+            checked={debugMode}
+            onChange={(event) => {
+              setDebugMode(event.target.checked);
+            }}
+          />
+          Show debug details on all pages (failed sensors, estimated values). Only in this browser.
+        </label>
         <p className="text-sm text-ink-muted">
           Every step the ESP32-CAM and the ATmega32 report, live. ATmega lines are relayed by the
           ESP32 over its serial link. Lines logged while the ESP32 was offline arrive when it

@@ -15,6 +15,11 @@ export interface Sample {
   photoBytes: number | null;
   /** What the ESP32 reported as the cause when `ok` is false, e.g. `dht=4,lux=ok`. */
   failReason: string | null;
+  /**
+   * For failed samples only: display values averaged from the 10 successful samples nearest in
+   * time, so pages can show readings instead of a failure. Never used for stats or exports.
+   */
+  fallback: { temperature: number; humidity: number; lux: number } | null;
   /** OpenAI verdict for the photo, set shortly after upload; null until it arrives. */
   classification: Classification | null;
   /** Model answer, HTTP status or error text behind the verdict, for debugging. */

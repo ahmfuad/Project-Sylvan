@@ -1,7 +1,8 @@
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../lib/api';
+import { setDebugMode } from '../lib/debugMode';
 import DataPage, { sortRows } from '../pages/DataPage';
 import { makeSample } from './fixtures';
 import { renderRoute } from './render';
@@ -20,6 +21,10 @@ const rows = [
   makeSample({ id: 2, ok: false, temperature: null, humidity: null, lux: null }),
   makeSample({ id: 1, temperature: 26 }),
 ];
+
+afterEach(() => {
+  setDebugMode(false);
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -48,7 +53,14 @@ describe('DataPage', () => {
     });
   });
 
-  it('updates the export link when filters change', async () => {
+  it('hides the OK/Failed filter unless debug mode is on', async () => {
+    renderRoute(<DataPage />, { path: '/data', url: '/data?range=all' });
+    await screen.findAllByText('#3');
+    expect(screen.queryByRole('group', { name: 'Status' })).not.toBeInTheDocument();
+  });
+
+  it('updates the export link when filters change (debug mode)', async () => {
+    setDebugMode(true);
     renderRoute(<DataPage />, { path: '/data', url: '/data?range=all' });
     await screen.findAllByText('#3');
     expect(exportParams()).toEqual({ tz: 'Asia/Dhaka' });

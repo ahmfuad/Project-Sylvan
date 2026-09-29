@@ -12,7 +12,12 @@ import {
   describeFailReason,
   formatConfidence,
 } from '../components/ui/ClassificationBadge';
+import { ConditionsBadge } from '../components/ui/ConditionsBadge';
 import { StatusBadge } from '../components/ui/StatusBadge';
+import { CONDITION_RANGES, evaluateConditions, type Rating } from '../lib/conditions';
+import { METRICS, METRIC_KEYS } from '../lib/constants';
+import { useDebugMode } from '../lib/debugMode';
+import { displayReadings } from '../lib/readings';
 import { ErrorState } from '../components/ui/States';
 import { isNotFound } from '../lib/api';
 import { compareToAverage } from '../lib/compare';
@@ -41,6 +46,7 @@ export default function SampleDetailPage() {
   const sample = useSample(id);
   const neighbors = useNeighbors(sample.data ? id : null);
   const stats = useStats({ ...apiRange, tz: timezone });
+  const debug = useDebugMode();
 
   const previousId = neighbors.data?.previousId ?? null;
   const nextId = neighbors.data?.nextId ?? null;
@@ -152,6 +158,7 @@ export default function SampleDetailPage() {
             Sample #{data.id}
           </h1>
           <StatusBadge ok={data.ok} className="text-sm" />
+          <ConditionsBadge sample={data} className="text-sm" />
           <ClassificationBadge sample={data} className="text-sm" />
         </div>
         <nav aria-label="Sample navigation" className="flex gap-2">
@@ -216,7 +223,7 @@ export default function SampleDetailPage() {
                 {data.photoUrl && !data.ai ? 'Checking the photo…' : 'No verdict.'}
               </p>
             )}
-            {!data.ok && (
+            {debug && !data.ok && (
               <div className="mt-4 border-t border-border pt-3 text-sm">
                 <p className="font-medium">Why the readings failed</p>
                 {data.failReason ? (
@@ -249,6 +256,8 @@ export default function SampleDetailPage() {
             )}
             <ReadingList sample={data} notes={notes} layout="sidebar" className="mt-4" />
           </Card>
+
+          <ConditionsCard sample={data} />
         </div>
       </div>
       <p className="mt-6 hidden text-xs text-ink-muted md:block">
@@ -292,5 +301,45 @@ function VerdictRow({
         )}
       </dd>
     </>
+  );
+}
+
+const RATING_TEXT: Record<Rating, { label: string; className: string }> = {
+  good: { label: 'Good', className: 'text-ok' },
+  fair: { label: 'Fair', className: 'text-ink' },
+  poor: { label: 'Poor', className: 'text-failed' },
+};
+
+/** The weather verdict with the rating of each reading and its good range. */
+function ConditionsCard({ sample }: { sample: Parameters<typeof displayReadings>[0] }) {
+  const readings = displayReadings(sample);
+  if (!readings) return null;
+  const { verdict, ratings } = evaluateConditions(readings);
+  const range = (key: (typeof METRIC_KEYS)[number]) => {
+    const [low, high] = CONDITION_RANGES[key].good;
+    const unit = METRICS[key].unit;
+    return high === Infinity ? `${String(low)}+ ${unit}` : `${String(low)}–${String(high)} ${unit}`;
+  };
+  return (
+    <Card aria-labelledby="conditions-heading" className="p-4 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 id="conditions-heading" className="text-base font-semibold">
+          Growing conditions
+        </h2>
+        <ConditionsBadge sample={sample} />
+      </div>
+      <dl className="mt-3 grid grid-cols-[auto_auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+        {METRIC_KEYS.map((key) => (
+          <div key={key} className="contents">
+            <dt className="text-ink-muted">{METRICS[key].label}</dt>
+            <dd className={`font-semibold ${RATING_TEXT[ratings[key]].className}`}>
+              {RATING_TEXT[ratings[key]].label}
+            </dd>
+            <dd className="text-ink-muted tabular">good: {range(key)}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="sr-only">Overall: {RATING_TEXT[verdict].label}</p>
+    </Card>
   );
 }

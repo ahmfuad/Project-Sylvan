@@ -15,6 +15,7 @@ const samples = [
     temperature: null,
     humidity: null,
     lux: null,
+    fallback: { temperature: 27.5, humidity: 64, lux: 900 },
   }),
   makeSample({ id: 28, createdAt: '2026-09-17T06:00:00Z' }),
 ];
@@ -70,9 +71,10 @@ describe('Lightbox', () => {
     );
 
     await user.keyboard('{ArrowRight}');
-    expect(screen.getByRole('dialog', { name: 'Sample #29' })).toHaveTextContent(
-      'sensor read failed',
-    );
+    // A failed sample shows the fallback values and no failure text in production.
+    const failed = screen.getByRole('dialog', { name: 'Sample #29' });
+    expect(failed).toHaveTextContent('27.5');
+    expect(failed).not.toHaveTextContent(/failed/i);
     await user.keyboard('{ArrowRight}');
     expect(screen.getByRole('dialog', { name: 'Sample #28' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Next photo' })).toBeDisabled();

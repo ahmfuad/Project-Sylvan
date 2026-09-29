@@ -5,6 +5,7 @@ import { IconArrowUpRight } from '../../components/ui/Icons';
 import { ReadingList } from '../../components/ui/Readings';
 import { RelativeTime } from '../../components/ui/RelativeTime';
 import { SamplePhoto } from '../../components/ui/SamplePhoto';
+import { ConditionsBadge } from '../../components/ui/ConditionsBadge';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { formatDateTime } from '../../lib/format';
 
@@ -31,6 +32,7 @@ export function LatestSample({ sample, linkSearch }: { sample: Sample; linkSearc
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-2xl font-semibold tabular">#{sample.id}</span>
             <StatusBadge ok={sample.ok} />
+            <ConditionsBadge sample={sample} />
           </div>
           <p className="text-sm text-ink-muted">
             {formatDateTime(sample.createdAt)}

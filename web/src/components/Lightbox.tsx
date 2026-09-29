@@ -9,6 +9,7 @@ import { ReadingList } from './ui/Readings';
 import { RelativeTime } from './ui/RelativeTime';
 import { SamplePhoto } from './ui/SamplePhoto';
 import { StatusBadge } from './ui/StatusBadge';
+import { ConditionsBadge } from './ui/ConditionsBadge';
 
 const SWIPE_MIN_PX = 50;
 
@@ -102,6 +103,7 @@ export function Lightbox({
                     Sample #{sample.id}
                   </Dialog.Title>
                   <StatusBadge ok={sample.ok} />
+                  <ConditionsBadge sample={sample} />
                   <span className="sr-only" aria-live="polite">
                     Photo {(index ?? 0) + 1} of {samples.length}
                   </span>

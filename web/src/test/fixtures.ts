@@ -10,6 +10,7 @@ export function makeSample(overrides: Partial<Sample> & { id: number }): Sample 
     photoUrl: `/photos/2026/09/${String(overrides.id).padStart(8, '0')}-0000-4000-8000-000000000000.jpg`,
     photoBytes: 18_000,
     failReason: null,
+    fallback: null,
     classification: null,
     classificationNote: null,
     classifiedAt: null,

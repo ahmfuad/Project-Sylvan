@@ -8,6 +8,8 @@ import { RelativeTime } from '../components/ui/RelativeTime';
 import { SamplePhoto } from '../components/ui/SamplePhoto';
 import { LoadingRegion, Skeleton } from '../components/ui/Skeleton';
 import { ClassificationBadge } from '../components/ui/ClassificationBadge';
+import { ConditionsBadge } from '../components/ui/ConditionsBadge';
+import { displayReadings } from '../lib/readings';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { StatusFilter } from '../components/ui/StatusFilter';
 import { EmptyState, ErrorState } from '../components/ui/States';
@@ -249,6 +251,7 @@ export default function DataPage() {
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-semibold tabular">#{sample.id}</span>
                     <span className="flex flex-wrap justify-end gap-1">
+                      <ConditionsBadge sample={sample} />
                       <ClassificationBadge sample={sample} />
                       <StatusBadge ok={sample.ok} />
                     </span>
@@ -313,24 +316,28 @@ export default function DataPage() {
                   </td>
                   <td className="px-2 py-1">
                     <span className="flex flex-wrap gap-1">
-                      <StatusBadge ok={sample.ok} />
+                      <ConditionsBadge sample={sample} />
                       <ClassificationBadge sample={sample} />
+                      <StatusBadge ok={sample.ok} />
                     </span>
                   </td>
-                  {(['temperature', 'humidity', 'lux'] as const).map((key) => (
-                    <td key={key} className="px-2 py-1 text-right whitespace-nowrap">
-                      {sample[key] === null ? (
-                        <span className="text-ink-muted">
-                          —
-                          <span className="sr-only">
-                            no {METRICS[key].label.toLowerCase()} reading
+                  {(['temperature', 'humidity', 'lux'] as const).map((key) => {
+                    const value = displayReadings(sample)?.[key] ?? null;
+                    return (
+                      <td key={key} className="px-2 py-1 text-right whitespace-nowrap">
+                        {value === null ? (
+                          <span className="text-ink-muted">
+                            —
+                            <span className="sr-only">
+                              no {METRICS[key].label.toLowerCase()} reading
+                            </span>
                           </span>
-                        </span>
-                      ) : (
-                        formatReading(key, sample[key])
-                      )}
-                    </td>
-                  ))}
+                        ) : (
+                          formatReading(key, value)
+                        )}
+                      </td>
+                    );
+                  })}
                   <td className="px-2 py-1 pr-4">
                     <div className="w-16 overflow-hidden rounded-sm">
                       <SamplePhoto sample={sample} size="sm" />

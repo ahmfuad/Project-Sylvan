@@ -90,6 +90,8 @@ describe('GET /api/samples', () => {
       classificationNote: null,
       classifiedAt: null,
       ai: null,
+      // Failed, so it gets display values from the one OK sample (id 2).
+      fallback: { temperature: 30, humidity: 66, lux: 235 },
     });
   });
 

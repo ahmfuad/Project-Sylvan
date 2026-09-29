@@ -8,6 +8,7 @@ import { RelativeTime } from '../components/ui/RelativeTime';
 import { SamplePhoto } from '../components/ui/SamplePhoto';
 import { LoadingRegion, Skeleton } from '../components/ui/Skeleton';
 import { ClassificationBadge } from '../components/ui/ClassificationBadge';
+import { ConditionsBadge } from '../components/ui/ConditionsBadge';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { StatusFilter } from '../components/ui/StatusFilter';
 import { EmptyState, ErrorState } from '../components/ui/States';
@@ -47,6 +48,7 @@ function GalleryCard({
           </span>
         </div>
         <CompactReadings sample={sample} />
+        <ConditionsBadge sample={sample} />
         <p className="text-xs text-ink-muted">
           <RelativeTime value={sample.createdAt} />
         </p>
